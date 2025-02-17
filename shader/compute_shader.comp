@@ -1,0 +1,111 @@
+#version 430 core
+
+#define MAX_NUM_SPHERES 10
+//Max local_work group sizes: x = 1024, y = 1024, z = 64
+layout (local_size_x = 10, local_size_y = 10, local_size_z = 1) in;
+
+layout(rgba32f, location = 0)  readonly uniform image2D srcImage;
+layout(rgba32f, location = 1) writeonly uniform image2D destImage;
+
+// variables
+layout (location = 2) uniform float t;    
+
+uniform int num_objects;
+
+layout(std140) uniform Spheres{
+    vec4 spheres[MAX_NUM_SPHERES];
+};
+
+layout(std140) uniform Mats{
+    vec4 mats[MAX_NUM_SPHERES];
+};
+
+layout(std140) uniform Mats_indicies{
+    int indicies[MAX_NUM_SPHERES];
+};
+
+struct Camera {
+    vec3  center;         // Camera center
+    vec3  pixel00_loc;    // Location of pixel 0, 0
+    vec3  pixel_delta_u;  // Offset to pixel to the right
+    vec3  pixel_delta_v;  // Offset to pixel below
+    vec3  u, v, w;         // Camera frame basis vectors
+    vec3  defocus_disk_u;    // Defocus disk horizontal radius
+    vec3  defocus_disk_v;    // Defocus disk vertical radius
+    double defocus_angle; 
+};
+
+
+struct Ray {
+    vec3 origin;
+    vec3 direction;
+};
+
+float random_float(vec2 co) {
+    return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+};
+
+float random_float2(vec2 co, float minimum, float maximum) {
+    return minimum + (maximum-minimum) * random_float(co);
+};
+
+vec3 random_in_unit_disk(vec2 co){
+    while(true){
+        vec3 p = vec3(random_float2(co, -1, 1), random_float2(co, -1, 1), 0);
+        if(dot(p, p) < 1){
+            return p;
+        }
+    }
+};
+
+vec3 defocus_disk_sample(Camera cam, vec2 co) {
+    // Return a random point in the camera defocus disk
+    vec3 p = random_in_unit_disk(co);
+    return cam.center + (p[0] * cam.defocus_disk_u) + (p[1] * cam.defocus_disk_v);
+};
+
+vec3 pixel_sample_square(Camera cam, vec2 co) {
+    // Returns a random point in the square surrounding a pixel at the origin.
+    float px = -0.5 + random_float(co);
+    float py = -0.5 + random_float(co);
+    return (px * cam.pixel_delta_u) + (py * cam.pixel_delta_v);
+};
+
+Ray get_ray(Camera cam, int i, int j){
+    // Get a randomly-sampled camera ray for the pixel at location i,j, 
+    // originating from the camera defocus disk.
+
+    vec3 pixel_center = cam.pixel00_loc + (i * cam.pixel_delta_u) + (j* cam.pixel_delta_v);
+    vec3 pixel_sample = pixel_center + pixel_sample_square(cam, pixel_center.xy);
+
+    vec3 ray_origin;
+    if(cam.defocus_angle <= 0) {
+        ray_origin = cam.center;
+    }
+    else{
+        ray_origin = defocus_disk_sample(cam, pixel_center.xy);
+    }
+
+    vec3 ray_direction = pixel_sample - ray_origin;
+
+    return Ray(ray_origin, ray_direction);
+};
+
+//Array of vec4 for sphere center and radius
+//Array of materials for spheres which matches with index of the sphere
+//vec4 representation for materials
+//array of int that reprenset which mats ex: 1=>metal 2=>lambertian 3=>dielectric
+
+
+void main() {
+    vec4 value = vec4(1.0, 0.0, 0.0, 1.0);
+    ivec2 texelCoord = ivec2(gl_GlobalInvocationID.xy);
+    float speed = 100;
+
+float width = 1000;
+	
+    value.x = mod(float(texelCoord.x) + t, width) / (gl_NumWorkGroups.x * gl_WorkGroupSize.x); 
+    value.y = float(texelCoord.y)/(gl_NumWorkGroups.y * gl_WorkGroupSize.y);
+
+    imageStore(destImage, texelCoord, value);
+}
