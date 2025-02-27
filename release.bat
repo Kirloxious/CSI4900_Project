@@ -1,3 +1,3 @@
 cmake --preset release
 cmake --build --preset release
-start "" out/build/releaseg/main.exe
+start "" out/build/release/main.exe
