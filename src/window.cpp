@@ -1,9 +1,9 @@
 #include "window.h"
 
 Window::Window(int width, int height, const char* title){
-    glewExperimental = GL_TRUE;
     glfwInit(); 
-    glViewport(0, 0, width, height);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     m_Window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     m_Title = title;
@@ -30,4 +30,8 @@ void Window::swapBuffers(){
 
 void Window::pollEvents(){
     glfwPollEvents();
+}
+
+void Window::getFrameBufferSize(){
+    glfwGetFramebufferSize(m_Window, &m_Width, &m_Height);
 }

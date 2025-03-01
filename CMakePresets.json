@@ -6,32 +6,106 @@
   },
   "configurePresets": [
     {
-      "name": "debug",
-      "description": "Debug build with debug symbols",
+      "name": "debug-windows",
+      "description": "Debug build with x64-mingw-dynamic",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/debug",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_SYSTEM_NAME": "Windows",
+        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/x86_64-w64-mingw32-gcc.exe",
+        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/x86_64-w64-mingw32-g++.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-mingw-dynamic"
       }
     },
     {
-      "name": "release",
-      "description": "Release build with optimizations",
+      "name": "release-windows",
+      "description": "Release build with x64-mingw-dynamic",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/out/build/release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_SYSTEM_NAME": "Windows",
+        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/x86_64-w64-mingw32-gcc.exe",
+        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/x86_64-w64-mingw32-g++.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-mingw-dynamic"
+      }
+    },
+    {
+      "name": "debug-macos",
+      "description": "Debug build for macOS using Clang",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/debug-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_SYSTEM_NAME": "Darwin",
+        "CMAKE_C_COMPILER": "/usr/bin/clang",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++"
+      }
+    },
+    {
+      "name": "release-macos",
+      "description": "Release build for macOS using Clang",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/release-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_SYSTEM_NAME": "Darwin",
+        "CMAKE_C_COMPILER": "/usr/bin/clang",
+        "CMAKE_CXX_COMPILER": "/usr/bin/clang++"
+      }
+    },
+    {
+      "name": "debug-linux",
+      "description": "Debug build for Linux using GCC",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/debug-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_SYSTEM_NAME": "Linux",
+        "CMAKE_C_COMPILER": "/usr/bin/gcc",
+        "CMAKE_CXX_COMPILER": "/usr/bin/g++"
+      }
+    },
+    {
+      "name": "release-linux",
+      "description": "Release build for Linux using GCC",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/release-linux",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_SYSTEM_NAME": "Linux",
+        "CMAKE_C_COMPILER": "/usr/bin/gcc",
+        "CMAKE_CXX_COMPILER": "/usr/bin/g++"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "debug",
-      "configurePreset": "debug"
+      "name": "debug-windows",
+      "configurePreset": "debug-windows"
     },
     {
-      "name": "release",
-      "configurePreset": "release"
+      "name": "release-windows",
+      "configurePreset": "release-windows"
+    },
+    {
+      "name": "debug-macos",
+      "configurePreset": "debug-macos"
+    },
+    {
+      "name": "release-macos",
+      "configurePreset": "release-macos"
+    },
+    {
+      "name": "debug-linux",
+      "configurePreset": "debug-linux"
+    },
+    {
+      "name": "release-linux",
+      "configurePreset": "release-linux"
     }
   ]
 }

@@ -1,4 +1,4 @@
-#version 440 core
+#version 460 core
 
 #define MAX_NUM_SPHERES 10
 //Max local_work group sizes: x = 1024, y = 1024, z = 64
@@ -15,7 +15,7 @@ layout(location = 4) uniform int frameIndex;
 
 uniform int num_objects;
 
-layout(std140) uniform Spheres{
+layout(std140, binding = 0) uniform Spheres{
     vec4 spheres[MAX_NUM_SPHERES];
 };
 
@@ -175,6 +175,7 @@ void main() {
     uint x = gl_GlobalInvocationID.x;
     uint y = gl_GlobalInvocationID.y;
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
+
 
     uint width = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
     uint height = gl_NumWorkGroups.y * gl_WorkGroupSize.y;

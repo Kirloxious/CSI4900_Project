@@ -1,59 +1,94 @@
-#ifndef COMPUTE_SHADER_H
-#define COMPUTE_SHADER_H
-
-#include <GL/glew.h>
+#pragma once
 
 #include <string>
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <filesystem>
 
 class ComputeShader
 {
 public:
     unsigned int ID;
-    // constructor generates the shader on the fly
     // ------------------------------------------------------------------------
-    ComputeShader(const char* computePath)
-    {
-        // 1. retrieve the vertex/fragment source code from filePath
-        std::string computeCode;
-        std::ifstream computeShaderFile;
-        // ensure ifstream objects can throw exceptions:
-        computeShaderFile.exceptions (std::ifstream::failbit | std::ifstream::badbit);
-        try 
-        {
-            // open files
-            computeShaderFile.open(computePath);
-            std::stringstream computeShaderStream;
-            // read file's buffer contents into streams
-            computeShaderStream << computeShaderFile.rdbuf();
-            // close file handlers
-            computeShaderFile.close();
-            // convert stream into string
-            computeCode   = computeShaderStream.str();
-        }
-        catch (std::ifstream::failure& e)
-        {
-            std::cout << "ERROR::SHADER::FILE_NOT_SUCCESSFULLY_READ: " << e.what() << std::endl;
-        }
-        const char* computeShaderCode = computeCode.c_str();
-        // 2. compile shaders
-        unsigned int compute;
-        // compute shader
-        compute = glCreateShader(GL_COMPUTE_SHADER);
-        glShaderSource(compute, 1, &computeShaderCode, NULL);
-        glCompileShader(compute);
-        checkCompileErrors(compute, "COMPUTE");
+    ComputeShader() {} // default constructor
 
-        // shader Program
-        ID = glCreateProgram();
-        glAttachShader(ID, compute);
-        glLinkProgram(ID);
-        checkCompileErrors(ID, "PROGRAM");
-        // delete the shaders as they're linked into our program now and no longer necessary
-        glDeleteShader(compute);
+    ComputeShader(const std::filesystem::path& path)
+    {
+        ID = loadShader(path);
     }
+
+    uint32_t loadShader(const std::filesystem::path& path) {
+        std::ifstream file(path);
+
+        if (!file.is_open())
+        {
+            std::cerr << "Failed to open file: " << path.string() << std::endl;
+        }
+    
+        std::ostringstream contentStream;
+        contentStream << file.rdbuf();
+        std::string shaderSource = contentStream.str();
+    
+        GLuint shaderHandle = glCreateShader(GL_COMPUTE_SHADER);
+    
+        const GLchar* source = (const GLchar*)shaderSource.c_str();
+        glShaderSource(shaderHandle, 1, &source, 0);
+    
+        glCompileShader(shaderHandle);
+    
+        GLint isCompiled = 0;
+        glGetShaderiv(shaderHandle, GL_COMPILE_STATUS, &isCompiled);
+        if (isCompiled == GL_FALSE)
+        {
+            GLint maxLength = 0;
+            glGetShaderiv(shaderHandle, GL_INFO_LOG_LENGTH, &maxLength);
+    
+            std::vector<GLchar> infoLog(maxLength);
+            glGetShaderInfoLog(shaderHandle, maxLength, &maxLength, &infoLog[0]);
+    
+            std::cerr << infoLog.data() << std::endl;
+    
+            glDeleteShader(shaderHandle);
+            return -1;
+        }
+    
+        GLuint program = glCreateProgram();
+        glAttachShader(program, shaderHandle);
+        glLinkProgram(program);
+    
+        GLint isLinked = 0;
+        glGetProgramiv(program, GL_LINK_STATUS, (int*)&isLinked);
+        if (isLinked == GL_FALSE)
+        {
+            GLint maxLength = 0;
+            glGetProgramiv(program, GL_INFO_LOG_LENGTH, &maxLength);
+    
+            std::vector<GLchar> infoLog(maxLength);
+            glGetProgramInfoLog(program, maxLength, &maxLength, &infoLog[0]);
+            
+            std::cerr << infoLog.data() << std::endl;
+    
+            glDeleteProgram(program);
+            glDeleteShader(shaderHandle);
+            return -1;
+        }
+    
+        glDetachShader(program, shaderHandle);
+        return program;
+    }
+
+    void reloadShader(const std::filesystem::path& path)
+    {
+        uint32_t newShader = loadShader(path);
+
+        if(newShader != -1)
+        {
+            glDeleteProgram(ID);
+            ID = newShader;
+        }
+    }
+
     // activate the shader
     // ------------------------------------------------------------------------
     void use() 
@@ -76,6 +111,7 @@ public:
     { 
         glUniform1f(glGetUniformLocation(ID, name.c_str()), value); 
     }
+
 
 private:
     // utility function for checking shader compilation/linking errors.
@@ -104,4 +140,3 @@ private:
         }
     }
 };
-#endif
