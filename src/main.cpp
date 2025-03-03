@@ -2,6 +2,7 @@
 #include <glm/glm.hpp>
 #include <iostream>
 #include <vector>
+#include <chrono>
 
 #include "renderer.h"
 #include "window.h"
@@ -18,6 +19,10 @@ static void ErrorCallback(int error, const char* description)
 	std::cerr << "Error: " << description << std::endl;
 }
 
+static double clockToMilliseconds(clock_t ticks){
+    // units/(units/time) => time (seconds) * 1000 = milliseconds
+    return (ticks/(double)CLOCKS_PER_SEC)*1000.0;
+}
 
 int main() {
 
@@ -30,12 +35,10 @@ int main() {
     
     window.makeCurrentContext();
 
-    std::cout << "before glad" << std::endl;
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cerr << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
-    std::cout << "GLAD version: " << std::endl;
     glfwSwapInterval(1);
 
 
@@ -70,38 +73,63 @@ int main() {
 
     FrameBuffer fb = createFrameBuffer(texture);
 
+    GLuint queryID;
+    glGenQueries(1, &queryID);
+
     int frameIndex = 0;
+    int frameCount = 0;
+    double deltaTime = 0;
+    double lastTime = glfwGetTime();
+    double timer = lastTime;
 
     while(!window.shouldClose()){
-
+        
+        
         // Compute 
         {
             compute.use();
             compute.setInt("time", clock());
             compute.setInt("frameIndex", frameIndex);
-
+            
             // Double buffer texture    
             glBindImageTexture(0, texture.handle, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
             glBindImageTexture(1, texture.handle, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
-     
+            
             const GLuint workGroupSizeX = 16;
 			const GLuint workGroupSizeY = 16;
-
+            
 			GLuint numGroupsX = (width + workGroupSizeX - 1) / workGroupSizeX;
 			GLuint numGroupsY = (height + workGroupSizeY - 1) / workGroupSizeY;
-
+            
+            glBeginQuery(GL_TIME_ELAPSED, queryID); // Computer shader timer start
 			glDispatchCompute(numGroupsX, numGroupsY, 1);
+            glEndQuery(GL_TIME_ELAPSED);            // Computer shader timer end
             
             // make sure writing to image has finished before read
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             
         }
+
+        GLuint64 executionTime;
+        glGetQueryObjectui64v(queryID, GL_QUERY_RESULT, &executionTime); // computer shader timer result
         
         blitFrameBuffer(fb);
-        ++frameIndex;
         
         window.swapBuffers();
         window.pollEvents();
+        
+        double currentTime = glfwGetTime();
+        deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+        ++frameIndex;
+        ++frameCount;
+
+        
+        if (currentTime - timer >= 1.0) {
+            std::cout << "FPS: " << frameCount << " | Frame Time: " << (1000.0 / frameCount) << " ms" << " | Compute Shader Time: " << (executionTime / 1e6) << " ms" << std::endl;
+            frameCount = 0;
+            timer = currentTime;
+        }
     }
 
     return 0;
