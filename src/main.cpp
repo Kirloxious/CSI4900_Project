@@ -12,7 +12,7 @@
 #define MAX_NUM_SPHERES 10
 
 static ComputeShader compute;
-static const std::filesystem::path computeShaderPath = "shader/compute_shader.comp";
+static const std::filesystem::path computeShaderPath = "shader/compute_shader.glsl";
 
 static void ErrorCallback(int error, const char* description)
 {
