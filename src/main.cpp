@@ -8,6 +8,7 @@
 #include "window.h"
 #include "compute_shader.h"
 #include "shader.h"
+#include "world.h"
 
 #define MAX_NUM_SPHERES 10
 
@@ -48,21 +49,40 @@ int main() {
     
     // World scene
     // Spheres format is [center_x, center_y, center_z, radius]
-    glm::vec4 sphereData[MAX_NUM_SPHERES] = {
-        glm::vec4(0.0f, 0.0f, -1.0f, 0.5f),
-        glm::vec4(0.0f, -100.5f, -1.0f, 100.0f),
+    Sphere spheres[MAX_NUM_SPHERES] = {
+        Sphere{glm::vec3( 0.0f,    0.0f, -1.2f), 0.5f, 0},
+        Sphere{glm::vec3(-1.0,    0.0, -1.0), 0.5f, 3},
+        Sphere{glm::vec3( 1.0,    0.0, -1.0), 0.5f, 2},
+        Sphere{glm::vec3 (0.0f, -100.5f, -1.0f), 100.0f, 1},
+
+    };
+
+    Material materials[MAX_NUM_SPHERES] = {
+        Material{glm::vec4(0.0f, 1.0f, 0.0f, 0.0f)},
+        Material{glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)},
+        Material{glm::vec4(0.8, 0.8, 0.8, 1.0)},
+        Material{glm::vec4(0.8, 0.6, 0.2, 1.0)},
+
     };
     
     // Create and bind UBO for spheres
-    GLuint ubo;
-    glCreateBuffers(1, &ubo);;
-    glBindBuffer(GL_UNIFORM_BUFFER, ubo);
-    glBufferData(GL_UNIFORM_BUFFER, MAX_NUM_SPHERES * sizeof(glm::vec4), sphereData, GL_STATIC_READ); //data upload
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, ubo); // binding location
+    GLuint spheres_ubo;
+    glCreateBuffers(1, &spheres_ubo);;
+    glBindBuffer(GL_UNIFORM_BUFFER, spheres_ubo);
+    glBufferData(GL_UNIFORM_BUFFER, MAX_NUM_SPHERES * sizeof(Sphere), spheres, GL_STATIC_READ); //data upload
+    glBindBufferBase(GL_UNIFORM_BUFFER, 0, spheres_ubo); // binding location
+
+    // // Create and bind UBO for materials
+    GLuint mats_ubo;
+    glCreateBuffers(1, &mats_ubo);;
+    glBindBuffer(GL_UNIFORM_BUFFER, mats_ubo);
+    glBufferData(GL_UNIFORM_BUFFER, MAX_NUM_SPHERES * sizeof(Material), materials, GL_STATIC_READ); //data upload
+    glBindBufferBase(GL_UNIFORM_BUFFER, 1, mats_ubo); // binding location
     
-    
-    
-    unsigned int num_objects = sizeof(sphereData) / sizeof(glm::vec4);
+
+
+    unsigned int num_objects = 4;
+    std::cout << sizeof(spheres) / sizeof(Sphere) << std::endl;
     compute = ComputeShader(computeShaderPath);
     compute.use();
     compute.setInt("num_objects", num_objects);
