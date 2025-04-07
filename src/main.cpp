@@ -40,7 +40,7 @@ int main() {
         std::cerr << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
-    glfwSwapInterval(1);
+    // glfwSwapInterval(1);
 
 
 
@@ -48,21 +48,20 @@ int main() {
 
     
     // World scene
-    // Spheres format is [center_x, center_y, center_z, radius]
+    // Spheres format is [center_x, center_y, center_z, radius, material_index]
     Sphere spheres[MAX_NUM_SPHERES] = {
-        Sphere{glm::vec3( 0.0f,    0.0f, -1.2f), 0.5f, 0},
-        Sphere{glm::vec3(-1.0,    0.0, -1.0), 0.5f, 3},
-        Sphere{glm::vec3( 1.0,    0.0, -1.0), 0.5f, 2},
-        Sphere{glm::vec3 (0.0f, -100.5f, -1.0f), 100.0f, 1},
-
+        Sphere{glm::vec3( 0.0f,    0.0f, -1.2f), 0.5f, 0},  // mid sphere
+        Sphere{glm::vec3(-1.0,    0.0, -1.0), 0.5f, 3},     // left sphere
+        Sphere{glm::vec3( 1.0,    0.0, -1.0), 0.5f, 2},     // right sphere
+        Sphere{glm::vec3 (0.0f, -100.5f, -1.0f), 100.0f, 1}, // ground
     };
 
+    // Materials format is [r, g, b, a] where a is the fuzziness level or the refraction index
     Material materials[MAX_NUM_SPHERES] = {
-        Material{glm::vec4(0.0f, 1.0f, 0.0f, 0.0f)},
-        Material{glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)},
-        Material{glm::vec4(0.8, 0.8, 0.8, 1.0)},
-        Material{glm::vec4(0.8, 0.6, 0.2, 1.0)},
-
+        Material{glm::vec4(0.0f, 1.0f, 0.0f, 0.0f), 0.0f}, // mid mat
+        Material{glm::vec4(1.0f, 0.0f, 0.0f, 0.0f), 0.0f}, // ground mat
+        Material{glm::vec4(0.8, 0.8, 0.8, 0.3), 0.0f}, // right mat
+        Material{glm::vec4(1.0, 1.0, 1.0, -1.0), 1.0 / 1.5f}, // left mat
     };
     
     // Create and bind UBO for spheres
@@ -81,7 +80,7 @@ int main() {
     
 
 
-    unsigned int num_objects = 4;
+    unsigned int num_objects = sizeof(spheres) / sizeof(Sphere);
     std::cout << sizeof(spheres) / sizeof(Sphere) << std::endl;
     compute = ComputeShader(computeShaderPath);
     compute.use();
@@ -96,8 +95,8 @@ int main() {
     GLuint queryID;
     glGenQueries(1, &queryID);
 
-    int frameIndex = 0;
-    int frameCount = 0;
+    int frameIndex = 0; // used for accumulating image
+    int frameCount = 0; // fps counting
     double deltaTime = 0;
     double lastTime = glfwGetTime();
     double timer = lastTime;

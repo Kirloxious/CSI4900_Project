@@ -40,7 +40,7 @@ struct Sphere{
 
 struct Material{
     vec4 color;
-    // int reflecting;
+    float refractive_index;
 };
 
 
@@ -180,24 +180,65 @@ bool world_hit(in Ray r, in float ray_tmin,  in float ray_tmax, inout HitRecord 
     return hit_anything;
 }
 
-vec3 lambertian_shading(vec3 point, vec3 normal, vec3 light_pos) {
-    vec3 light_dir = normalize(light_pos - point);
-    float intensity = max(dot(normal, light_dir), 0.0);
-    return vec3(1.0) * intensity;  // Assuming white light
+float reflectance(float cosine, float ref_idx) {
+    // Schlick's approximation
+    cosine = clamp(cosine, 0.0, 1.0);
+    float r0 = (1.0 - ref_idx) / (1.0 + ref_idx);
+    r0 = r0 * r0;
+    return r0 + (1.0 - r0) * pow(1.0 - cosine, 5.0);
 }
 
 bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 attenuation, inout Ray scattered) {
-    vec3 refracted;
-    if (mats[hit_rec.mat_index].color.a == 1.0) {
-        refracted = reflect(ray_in.direction, hit_rec.normal);
-    } else {
-        refracted = hit_rec.normal + random_unit_vector(state);   
-        if(length(refracted) < 0.0001) 
-            refracted = hit_rec.normal; 
+    vec3 reflected;
+    float fuzz = mats[hit_rec.mat_index].color.a;
+
+    // Lambertian scatter
+    if (fuzz == 0.0) {
+        reflected = hit_rec.normal + random_unit_vector(state);   
+        // Catch degenerate rays
+        if(length(reflected) < 0.0001) 
+            reflected = hit_rec.normal; 
     }
 
-    refracted = normalize(refracted);
-    scattered = Ray(hit_rec.point, refracted);
+    // Metal reflect with fuzziness
+    else if (fuzz > 0.0 && fuzz <= 1.0) {
+        reflected = reflect(ray_in.direction, hit_rec.normal);
+        reflected = normalize(reflected) + fuzz * random_unit_vector(state);
+    } 
+
+    // Dielectric refraction
+    else {
+        attenuation = vec3(1.0, 1.0, 1.0);
+
+        float ri = hit_rec.front_face ? (1.0 / mats[hit_rec.mat_index].refractive_index)
+                                    : mats[hit_rec.mat_index].refractive_index;
+
+        vec3 unit_direction = normalize(ray_in.direction);
+        vec3 normal = normalize(hit_rec.normal);  // ensure normalized
+
+        float cos_theta = clamp(dot(-unit_direction, normal), -1.0, 1.0);
+        float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
+
+        bool cannot_refract = ri * sin_theta > 1.0;
+
+        vec3 direction;
+        if (cannot_refract || reflectance(cos_theta, ri) > RandomUnilateral(state)) {
+            direction = reflect(unit_direction, normal);
+        } else {
+            direction = refract(unit_direction, normal, ri);
+        }
+
+        // Catch degenerate rays
+        if(length(direction) < 0.0001) 
+            direction = normal; 
+
+        direction = normalize(direction); 
+        scattered = Ray(hit_rec.point, direction);
+        return true;
+    }
+
+    reflected = normalize(reflected);   
+    scattered = Ray(hit_rec.point, reflected);
     attenuation = mats[hit_rec.mat_index].color.rgb;
     return true;
 }
@@ -301,8 +342,8 @@ void main() {
 
     vec3 pixel_color = vec3(0.0, 0.0, 0.0);
     for (int s = 0; s < samples_per_pixels; s++){
-            vec3 offset = sample_square(random_state);
-            vec3 pixel_sample = pixel00_loc + ((x + offset.x) * pixel_delta_u)+ ((y + offset.y) * pixel_delta_v);
+        vec3 offset = sample_square(random_state);
+        vec3 pixel_sample = pixel00_loc + ((x + offset.x) * pixel_delta_u)+ ((y + offset.y) * pixel_delta_v);
 
         Ray ray;
         ray.origin = camera_center;

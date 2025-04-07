@@ -12,6 +12,7 @@ struct alignas(16) Sphere
 struct alignas(16) Material
 {
     glm::vec4 color;
+    float refractive_index;
 };
 
 
