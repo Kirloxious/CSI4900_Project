@@ -9,6 +9,7 @@
 #include "compute_shader.h"
 #include "shader.h"
 #include "world.h"
+#include "camera.h"
 
 #define MAX_NUM_SPHERES 10
 
@@ -29,10 +30,21 @@ int main() {
 
     glfwSetErrorCallback(ErrorCallback);
     
-    int width = 800;
-    int height = 600;
+    CameraSettings camSettings{};
+    camSettings.aspect_ratio = 16.0f / 9.0f;
+    camSettings.image_width = 1080;
+    camSettings.samples_per_pixel = 10;
+    camSettings.max_depth = 10;
+    camSettings.vfov = 20.0;
+    camSettings.focus_dist = 20.0;
+    camSettings.defocus_angle = 0.5;
+    camSettings.lookfrom = glm::vec3(-2, 2, 1);
+    camSettings.lookat = glm::vec3(0, 0, -1);
+    camSettings.vup = glm::vec3(0, 1, 0);
+
+    Camera camera = Camera(camSettings);
     
-    Window window(width, height, "window");
+    Window window(camera.image_width, camera.image_height, "window");
     
     window.makeCurrentContext();
 
@@ -71,7 +83,7 @@ int main() {
     glBufferData(GL_UNIFORM_BUFFER, MAX_NUM_SPHERES * sizeof(Sphere), spheres, GL_STATIC_READ); //data upload
     glBindBufferBase(GL_UNIFORM_BUFFER, 0, spheres_ubo); // binding location
 
-    // // Create and bind UBO for materials
+    // Create and bind UBO for materials
     GLuint mats_ubo;
     glCreateBuffers(1, &mats_ubo);;
     glBindBuffer(GL_UNIFORM_BUFFER, mats_ubo);
@@ -79,13 +91,20 @@ int main() {
     glBindBufferBase(GL_UNIFORM_BUFFER, 1, mats_ubo); // binding location
     
 
+    // Create and bind UBO for camera
+    GLuint cam_ubo;
+    glCreateBuffers(1, &cam_ubo);;
+    glBindBuffer(GL_UNIFORM_BUFFER, cam_ubo);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(CameraData), &camera.data, GL_STATIC_READ); //data upload
+    glBindBufferBase(GL_UNIFORM_BUFFER, 2, cam_ubo); // binding location
+
 
     unsigned int num_objects = sizeof(spheres) / sizeof(Sphere);
     std::cout << sizeof(spheres) / sizeof(Sphere) << std::endl;
     compute = ComputeShader(computeShaderPath);
     compute.use();
     compute.setInt("num_objects", num_objects);
-
+    compute.setVec2("imageDimensions", glm::vec2(camera.image_width, camera.image_height));
     
 
     Texture texture = createTexture(window.m_Width, window.m_Height);
@@ -117,8 +136,8 @@ int main() {
             const GLuint workGroupSizeX = 16;
 			const GLuint workGroupSizeY = 16;
             
-			GLuint numGroupsX = (width + workGroupSizeX - 1) / workGroupSizeX;
-			GLuint numGroupsY = (height + workGroupSizeY - 1) / workGroupSizeY;
+			GLuint numGroupsX = (camera.image_width + workGroupSizeX - 1) / workGroupSizeX;
+			GLuint numGroupsY = (camera.image_height + workGroupSizeY - 1) / workGroupSizeY;
             
             glBeginQuery(GL_TIME_ELAPSED, queryID); // Computer shader timer start
 			glDispatchCompute(numGroupsX, numGroupsY, 1);

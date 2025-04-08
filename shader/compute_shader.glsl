@@ -1,26 +1,14 @@
 #version 460 core
 
 #define MAX_NUM_SPHERES 10
-//Max local_work group sizes: x = 1024, y = 1024, z = 64
+
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(rgba32f, location = 0)  readonly uniform image2D srcImage;
 layout(rgba32f, location = 1) writeonly uniform image2D destImage;
-layout(location = 2) uniform vec3 cameraPosition;
 layout(location = 3) uniform int time;
 layout(location = 4) uniform int frameIndex;
-
-struct Camera {
-    vec3  center;         // Camera center
-    vec3  pixel00_loc;    // Location of pixel 0, 0
-    vec3  pixel_delta_u;  // Offset to pixel to the right
-    vec3  pixel_delta_v;  // Offset to pixel below
-    vec3  u, v, w;         // Camera frame basis vectors
-    vec3  defocus_disk_u;    // Defocus disk horizontal radius
-    vec3  defocus_disk_v;    // Defocus disk vertical radius
-    double defocus_angle; 
-};
-
+layout(location = 5) uniform vec2 imageDimensions;
 
 struct Ray {
     vec3 origin;
@@ -32,19 +20,13 @@ struct Sphere{
     float radius;
     uint material_index;
 };
-// Materials indecies
-// While creating the spheres, we pass in the material index to let the scatter function know how to scatter the ray
-// Diffuse/Lambertian: 0
-// Metal: 1
-// Dielectric: 2
+
 
 struct Material{
     vec4 color;
     float refractive_index;
 };
 
-
-// variables
 
 uniform int num_objects;
 
@@ -56,9 +38,15 @@ layout(std140, binding = 1) uniform MatsBuffer{
     Material mats[MAX_NUM_SPHERES];
 };
 
-// layout(std140) uniform Mats_indicies{
-//     int indicies[MAX_NUM_SPHERES];
-// };
+layout(std140, binding = 2) uniform Camera {
+    mat4 viewMatrix;
+    mat4 projMatrix;
+    mat4 invViewMatrix;
+    mat4 invProjMatrix;
+    vec4 cameraPosition;
+    float focus_distance;
+    float defocus_angle;
+};
 
 const float infinity = 1./0.;
 
@@ -290,6 +278,39 @@ vec3 linear_to_srgb(vec3 linearColor) {
     );
 }
 
+float random_float(inout uint state) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return float(state & 0x00FFFFFFu) / float(0x01000000);
+}
+
+vec2 sample_disk(inout uint state) {
+    // Generate two random numbers in [0, 1)
+    float u1 = RandomUnilateral(state);
+    float u2 = RandomUnilateral(state);
+
+    // Map to [-1, 1]
+    float x = 2.0 * u1 - 1.0;
+    float y = 2.0 * u2 - 1.0;
+
+    // Handle degenerate case at origin
+    if (x == 0.0 && y == 0.0) {
+        return vec2(0.0);
+    }
+
+    float r, theta;
+    if (abs(x) > abs(y)) {
+        r = x;
+        theta = (3.14159265 / 4.0) * (y / x);
+    } else {
+        r = y;
+        theta = (3.14159265 / 2.0) - (3.14159265 / 4.0) * (x / y);
+    }
+
+    return r * vec2(cos(theta), sin(theta));
+}
+
 // in: “pass by value”; if the parameter’s value is changed in the function, the actual parameter from the calling statement is unchanged.
 
 // out: “pass by reference”; the parameter is not initialized when the function is called; any changes in the parameter’s value changes the actual parameter from the calling statement.
@@ -306,53 +327,94 @@ void main() {
     uint y = gl_GlobalInvocationID.y;
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
 
-
-    uint width = gl_NumWorkGroups.x * gl_WorkGroupSize.x;
-    uint height = gl_NumWorkGroups.y * gl_WorkGroupSize.y;
-
-    float imageAspectRatio = float(width) / float(height);
+    uint width = uint(imageDimensions.x);
+    uint height = uint(imageDimensions.y);
 
     uint random_state = time * (x + y * 36) + 1;
 
-    // Camera settings
-    float focal_length = 1.0;
-    float viewport_height = 2.0;
-    float viewport_width = float(width) / float(height) * viewport_height;
-    vec3 camera_center = vec3(0.0, 0.0, 0.0); 
+    // float imageAspectRatio = float(width) / float(height);
 
-    // Viewport basis vectors
-    vec3 viewport_u = vec3(viewport_width, 0, 0);
-    vec3 viewport_v = vec3(0, viewport_height, 0); 
+    // // Camera settings
+    // float focal_length = 1.0;
+    // float viewport_height = 2.0;
+    // float viewport_width = float(width) / float(height) * viewport_height;
+    // vec3 camera_center = vec3(0.0, 0.0, 0.0); 
 
-    vec3 pixel_delta_u = viewport_u / float(width);
-    vec3 pixel_delta_v = viewport_v / float(height);
+    // // Viewport basis vectors
+    // vec3 viewport_u = vec3(viewport_width, 0, 0);
+    // vec3 viewport_v = vec3(0, viewport_height, 0); 
 
-    // Calculate pixel position
-    vec3 viewport_upper_left = camera_center - vec3(0, 0, focal_length) - viewport_u / 2 - viewport_v / 2;
-    vec3 pixel_center = viewport_upper_left + float(x) * pixel_delta_u + float(y) * pixel_delta_v;
-    vec3 pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+    // vec3 pixel_delta_u = viewport_u / float(width);
+    // vec3 pixel_delta_v = viewport_v / float(height);
+
+    // // Calculate pixel position
+    // vec3 viewport_upper_left = camera_center - vec3(0, 0, focal_length) - viewport_u / 2 - viewport_v / 2;
+    // vec3 pixel_center = viewport_upper_left + float(x) * pixel_delta_u + float(y) * pixel_delta_v;
+    // vec3 pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
     // Construct the ray
     // Ray ray;
     // ray.origin = camera_center;
     // ray.direction = normalize(pixel_center - camera_center);
 
-    uint samples_per_pixels = 8;
+    uint samples_per_pixel = 8;
     uint max_bounces = 8;
 
-    vec3 pixel_color = vec3(0.0, 0.0, 0.0);
-    for (int s = 0; s < samples_per_pixels; s++){
-        vec3 offset = sample_square(random_state);
-        vec3 pixel_sample = pixel00_loc + ((x + offset.x) * pixel_delta_u)+ ((y + offset.y) * pixel_delta_v);
+    // vec3 pixel_color = vec3(0.0, 0.0, 0.0);
+    // for (int s = 0; s < samples_per_pixel; s++){
+    //     vec3 offset = sample_square(random_state);
+    //     vec3 pixel_sample = pixel00_loc + ((x + offset.x) * pixel_delta_u)+ ((y + offset.y) * pixel_delta_v);
+
+    //     Ray ray;
+    //     ray.origin = camera_center;
+    //     ray.direction = normalize(pixel_sample - camera_center);
+    //     pixel_color += ray_color(ray, max_bounces, random_state);
+    // }
+
+    vec3 pixel_color = vec3(0.0);
+    for (int s = 0; s < samples_per_pixel; ++s) {
+        vec2 offset = sample_square(random_state).xy;  
+        vec2 uv = (vec2(pixel_coords) + offset) / vec2(width, height);
+        vec2 ndc = uv * 2.0 - 1.0; // Normalized Device Coords
+
+
+        vec4 clip = vec4(ndc, -1.0, 1.0); // NDC -> clip
+        vec4 view = invProjMatrix * clip; // Clip -> View
+        view /= view.w;
+
+        vec4 world = invViewMatrix * view; // View -> World
+        vec3 dir = normalize(world.xyz - cameraPosition.xyz);
+
+        vec3 origin = cameraPosition.xyz;
+
+        // Depth of field
+        if (defocus_angle > 0.0) {
+            // Sample lens disk
+            vec2 lens_uv = sample_disk(random_state) * tan(radians(defocus_angle * 0.5)) * focus_distance;
+
+            // Reconstruct camera basis from inverse view matrix
+            vec3 right = vec3(invViewMatrix[0].xyz);
+            vec3 up    = vec3(invViewMatrix[1].xyz);
+
+            // Offset ray origin by aperture sample
+            vec3 offset = right * lens_uv.x + up * lens_uv.y;
+            origin += offset;
+
+            // Recompute direction toward focus plane
+            vec3 focal_point = cameraPosition.xyz + dir * focus_distance;
+            dir = normalize(focal_point - origin);
+        }
 
         Ray ray;
-        ray.origin = camera_center;
-        ray.direction = normalize(pixel_sample - camera_center);
+        ray.origin = cameraPosition.xyz;
+        ray.direction = dir;
+
         pixel_color += ray_color(ray, max_bounces, random_state);
     }
+
     vec3 prevColor = imageLoad(srcImage, pixel_coords).xyz;
 
-    float scale_factor = 1.0 / float(samples_per_pixels);
+    float scale_factor = 1.0 / float(samples_per_pixel);
     pixel_color *= scale_factor;
     pixel_color = linear_to_srgb(pixel_color);
 
