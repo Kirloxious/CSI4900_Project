@@ -50,7 +50,7 @@ layout(std140, binding = 2) uniform Camera {
     mat4 projMatrix;
     mat4 invViewMatrix;
     mat4 invProjMatrix;
-    vec4 cameraPosition;
+    vec3 cameraPosition;
     float focus_distance;
     float defocus_angle;
 };
@@ -161,6 +161,8 @@ bool hit_sphere(in Ray r, in Sphere s, float ray_tmin, float ray_tmax, inout Hit
 
 
 /** Ray functions **/
+
+// Brute force intersection 
 bool world_hit(in Ray r, in float ray_tmin,  in float ray_tmax, inout HitRecord hit_rec) {
     HitRecord temp_rec;
     bool hit_anything = false;
@@ -191,6 +193,7 @@ bool intersect_aabb(in Ray r, in vec3 min_b, in vec3 max_b, in vec3 inv_dir) {
     return t_near < t_far && t_far > 0.0f;
 }
 
+// BVH traversal intersection
 bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRecord hit_rec) {
     vec3 inv_dir = 1.0f / r.direction; 
 
@@ -201,7 +204,7 @@ bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRec
     // Start with the root node of the BVH
     int stack[1000]; // Stack for BVH traversal, adjust size if needed
     int stack_ptr = 0;
-    stack[stack_ptr++] = root_index; // Start at the root node
+    stack[stack_ptr++] = 0; // Start at the root node
     
     while (stack_ptr > 0) {
         int node_idx = stack[--stack_ptr];  // Pop a node index from the stack
@@ -233,6 +236,38 @@ bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRec
     
     return hit_anything;
 }
+
+bool world_hit_aabb_stackless(in Ray r, in float tMin, in float tMax, inout HitRecord hit) {
+    vec3 invDir = 1.0 / r.direction;
+    int idx = root_index;
+    bool hitSomething = false;
+    float closest = tMax;
+    
+    while(idx >= 0) {
+        BVHNodeFlat node = nodes[idx];
+        if (intersect_aabb(r, node.aabbMin.xyz, node.aabbMax.xyz, invDir)) {
+            // Check if leaf
+            if (node.meta.z != -1) {
+                Sphere s = spheres[node.meta.z];
+                HitRecord temp;
+                if (hit_sphere(r, s, tMin, closest, temp)) {
+                    closest = temp.t;
+                    hit = temp;
+                    hitSomething = true;
+                }
+                idx = node.meta.w; // move to next node using the next pointer
+            }
+            else {
+                // Not a leaf: move to left child
+                idx = node.meta.x; // assume left child is stored here
+            }
+        } else {
+            idx = node.meta.w; // skip to next node if AABB missed
+        }
+    }
+    return hitSomething;
+}
+
 
 float reflectance(float cosine, float ref_idx) {
     // Schlick's approximation
@@ -307,7 +342,7 @@ vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
 
     for (int i = 0; i < max_bounces; i++) {
         HitRecord hit_rec;
-        if (world_hit_aabb(current_ray, 0.001, infinity, hit_rec)) {
+        if (world_hit_aabb_stackless(current_ray, 0.001, infinity, hit_rec)) {
             Ray scattered;
             vec3 attenuation;
             if (scatter(state, current_ray, hit_rec, attenuation, scattered)) {
@@ -337,7 +372,7 @@ vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
 
     for (int bounce = 0; bounce < max_bounces; bounce++) {
         HitRecord hit_rec;
-        if (world_hit_aabb(current_ray, 0.001, infinity, hit_rec)) {
+        if (world_hit_aabb_stackless(current_ray, 0.001, infinity, hit_rec)) {
             Ray scattered;
             vec3 attenuation;
             if (scatter(state, current_ray, hit_rec, attenuation, scattered)) {
@@ -365,7 +400,6 @@ vec3 sample_square(uint state) {
     // Returns the vector to a random point in the [-.5,-.5]-[+.5,+.5] unit square.
     return vec3(RandomBilateral(state) - 0.5, RandomBilateral(state) - 0.5, 0);
 }
-
 
 
 /** End of Ray **/
@@ -425,8 +459,8 @@ void main() {
     uint samples_per_pixel = 1;
     uint max_bounces = 8;
 
+
     vec2 inv_resolution = 1.0 / vec2(width, height);
-    vec3 camera_pos = cameraPosition.xyz;
     vec3 camera_right = vec3(invViewMatrix[0].xyz);
     vec3 camera_up    = vec3(invViewMatrix[1].xyz);
     float lens_radius = tan(radians(defocus_angle * 0.5)) * focus_distance;
@@ -443,15 +477,15 @@ void main() {
         vec4 view_pos = invProjMatrix * vec4(ndc, -1.0, 1.0);
         view_pos /= view_pos.w;
         vec4 world_pos = invViewMatrix * view_pos;
-        vec3 dir = normalize(world_pos.xyz - camera_pos);
+        vec3 dir = normalize(world_pos.xyz - cameraPosition);
 
         // Sample lens disk and shift ray origin
         vec2 lens_sample = sample_disk(random_state) * lens_radius;
         vec3 lens_offset = camera_right * lens_sample.x + camera_up * lens_sample.y;
-        vec3 origin = camera_pos + lens_offset;
+        vec3 origin = cameraPosition + lens_offset;
 
         // Recompute ray direction toward focal point
-        vec3 focal_point = camera_pos + dir * focus_distance;
+        vec3 focal_point = cameraPosition + dir * focus_distance;
         dir = normalize(focal_point - origin);
 
         Ray ray;
@@ -467,9 +501,9 @@ void main() {
     pixel_color *= scale_factor;
     pixel_color = linear_to_srgb(pixel_color);
 
-    vec3 sum_color = prevColor * max(frameIndex, 1);
-
+    vec3 sum_color = prevColor * max(frameIndex, 0);
     vec3 final_color = (pixel_color + sum_color) / float(frameIndex + 1);
+
     imageStore(destImage, pixel_coords, vec4(final_color, 1.0));
 }
 

@@ -149,14 +149,15 @@ int main() {
 
     std::vector<BVHNodeFlat> bvhFlat;
     bvhFlat.reserve(bvhNodes.size());
+    flattenBVH(root, bvhNodes, bvhFlat, -1);
 
-    for (const auto& node : bvhNodes) {
-        BVHNodeFlat flat;
-        flat.aabbMin = glm::vec4(node.aabb.min, 0.0f);
-        flat.aabbMax = glm::vec4(node.aabb.max, 0.0f);
-        flat.meta = glm::ivec4(node.left, node.right, node.sphereIndex, 0);
-        bvhFlat.push_back(flat);
-    }
+    // for (const auto& node : bvhNodes) {
+    //     BVHNodeFlat flat;
+    //     flat.aabbMin = glm::vec4(node.aabb.min, 0.0f);
+    //     flat.aabbMax = glm::vec4(node.aabb.max, 0.0f);
+    //     flat.meta = glm::ivec4(node.left, node.right, node.sphereIndex, 0);
+    //     bvhFlat.push_back(flat);
+    // }
 
     std::cout << "Number of BVH nodes: " << bvhNodes.size() << std::endl;
     std::cout << "Root index: " << root << std::endl;
@@ -183,7 +184,7 @@ int main() {
     GLuint cam_ubo;
     glCreateBuffers(1, &cam_ubo);;
     glBindBuffer(GL_UNIFORM_BUFFER, cam_ubo);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(CameraData), &camera.data, GL_STATIC_READ); //data upload
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(CameraData), &camera.data, GL_STATIC_READ); //data upload, Change to dynamic draw once camera can move
     glBindBufferBase(GL_UNIFORM_BUFFER, 2, cam_ubo); // binding location
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
@@ -218,10 +219,21 @@ int main() {
     double timer = lastTime;
 
     while(!window.shouldClose()){
+
+        if (camera.moving) {
+            frameIndex = 0; // resets the frame accumulation in compute if camera moved last frame
+            camera.moving = false;
+        }
+        // camera.data.view = glm::rotate(camera.data.view, glm::radians(0.01f), glm::vec3(0.0f, 1.0f, 0.0f));
+        camera.update(window.m_Window, deltaTime, camera);
         
-        
+        camera.updateInvMatrices();
+        glBindBuffer(GL_UNIFORM_BUFFER, cam_ubo);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CameraData), &camera.data);
+        glBindBuffer(GL_UNIFORM_BUFFER, 0);
         // Compute 
         {
+            ++frameIndex;
             compute.use();
             compute.setInt("time", clock());
             compute.setInt("frameIndex", frameIndex);
@@ -256,8 +268,8 @@ int main() {
         double currentTime = glfwGetTime();
         deltaTime = currentTime - lastTime;
         lastTime = currentTime;
-        ++frameIndex;
         ++frameCount;
+
 
         
         if (currentTime - timer >= 1.0) {
