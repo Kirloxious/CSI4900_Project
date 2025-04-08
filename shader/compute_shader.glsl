@@ -27,15 +27,22 @@ struct Material{
     float refractive_index;
 };
 
-
-uniform int num_objects;
-
-layout(binding = 0) uniform SpheresBuffer{
-    Sphere spheres[MAX_NUM_SPHERES];
+struct BVHNodeFlat {
+    vec4 aabbMin;
+    vec4 aabbMax;
+    ivec4 meta; // x: left, y: right, z: sphereIndex, w: unused
 };
 
-layout(std140, binding = 1) uniform MatsBuffer{
-    Material mats[MAX_NUM_SPHERES];
+uniform int num_objects;
+uniform int bvh_size;
+uniform int root_index;
+
+layout(std430, binding = 0) buffer SpheresBuffer{
+    Sphere spheres[];
+};
+
+layout(std430, binding = 1) buffer MatsBuffer{
+    Material mats[];
 };
 
 layout(std140, binding = 2) uniform Camera {
@@ -48,7 +55,14 @@ layout(std140, binding = 2) uniform Camera {
     float defocus_angle;
 };
 
+layout(std430, binding = 3) buffer BVHBuffer {
+    BVHNodeFlat nodes[];
+};
+
+
+
 const float infinity = 1./0.;
+const float PI = 3.1415926535897932384626433832795;
 
 // The state must be initialized to non-zero value
 uint XOrShift32(inout uint state)
@@ -88,11 +102,7 @@ vec3 random_unit_vector(uint state) {
 
 vec3 random_on_hemisphere(uint state, vec3 normal) {
     vec3 direction = random_unit_vector(state);
-    if (dot(direction, normal) > 0.0) { // same hemisphere as normal
-        return direction;
-    } else {
-        return -direction;
-    }
+    return (dot(direction, normal) > 0.0) ? direction : -direction;
 }
 
 
@@ -168,6 +178,62 @@ bool world_hit(in Ray r, in float ray_tmin,  in float ray_tmax, inout HitRecord 
     return hit_anything;
 }
 
+bool intersect_aabb(in Ray r, in vec3 min_b, in vec3 max_b, in vec3 inv_dir) {
+    vec3 tmin = (min_b - r.origin) * inv_dir;
+    vec3 tmax = (max_b - r.origin) * inv_dir;
+    
+    vec3 t1 = min(tmin, tmax);
+    vec3 t2 = max(tmin, tmax);
+    
+    float t_near = max(max(t1.x, t1.y), t1.z);
+    float t_far = min(min(t2.x, t2.y), t2.z);
+    
+    return t_near < t_far && t_far > 0.0f;
+}
+
+bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRecord hit_rec) {
+    vec3 inv_dir = 1.0f / r.direction; 
+
+    HitRecord temp_rec;
+    bool hit_anything = false;
+    float closest_so_far = ray_tmax;
+
+    // Start with the root node of the BVH
+    int stack[1000]; // Stack for BVH traversal, adjust size if needed
+    int stack_ptr = 0;
+    stack[stack_ptr++] = root_index; // Start at the root node
+    
+    while (stack_ptr > 0) {
+        int node_idx = stack[--stack_ptr];  // Pop a node index from the stack
+        BVHNodeFlat node = nodes[node_idx];  // Get the node from the BVH
+        
+        // Check if the ray intersects the AABB of this node
+        if (intersect_aabb(r, node.aabbMin.xyz, node.aabbMax.xyz, inv_dir)) {
+            
+            // If it's a leaf node, check the sphere
+            if (node.meta.z != -1) {  // leaf node condition (sphere index >= 0)
+                Sphere s = spheres[node.meta.z];
+                if (hit_sphere(r, s, ray_tmin, closest_so_far, temp_rec)) {
+                    if (temp_rec.t < closest_so_far) {
+                        hit_anything = true;
+                        closest_so_far = temp_rec.t;
+                        hit_rec = temp_rec;
+                    }
+                }
+            } else { // Internal node, push left and right children to stack
+                if (node.meta.x != -1) {
+                    stack[stack_ptr++] = node.meta.x;
+                }
+                if (node.meta.y != -1) {
+                    stack[stack_ptr++] = node.meta.y;
+                }
+            }
+        }
+    }
+    
+    return hit_anything;
+}
+
 float reflectance(float cosine, float ref_idx) {
     // Schlick's approximation
     cosine = clamp(cosine, 0.0, 1.0);
@@ -181,7 +247,7 @@ bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 attenua
     float fuzz = mats[hit_rec.mat_index].color.a;
 
     // Lambertian scatter
-    if (fuzz == 0.0) {
+    if (fuzz == -1.0) {
         reflected = hit_rec.normal + random_unit_vector(state);   
         // Catch degenerate rays
         if(length(reflected) < 0.0001) 
@@ -189,7 +255,7 @@ bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 attenua
     }
 
     // Metal reflect with fuzziness
-    else if (fuzz > 0.0 && fuzz <= 1.0) {
+    else if (fuzz >= 0.0 && fuzz <= 1.0) {
         reflected = reflect(ray_in.direction, hit_rec.normal);
         reflected = normalize(reflected) + fuzz * random_unit_vector(state);
     } 
@@ -202,7 +268,7 @@ bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 attenua
                                     : mats[hit_rec.mat_index].refractive_index;
 
         vec3 unit_direction = normalize(ray_in.direction);
-        vec3 normal = normalize(hit_rec.normal);  // ensure normalized
+        vec3 normal = hit_rec.normal;  // ensure normalized
 
         float cos_theta = clamp(dot(-unit_direction, normal), -1.0, 1.0);
         float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
@@ -231,6 +297,7 @@ bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 attenua
     return true;
 }
 
+// Original ray color
 vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
     vec3 accumulated_color  = vec3(1.0);
     
@@ -238,13 +305,9 @@ vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
     current_ray.origin = ray.origin;
     current_ray.direction = ray.direction;
 
-    uint bounces_computed = 0;
     for (int i = 0; i < max_bounces; i++) {
         HitRecord hit_rec;
-        if (world_hit(current_ray, 0.001, infinity, hit_rec)) {
-            Material mat = mats[hit_rec.mat_index];
-            ++bounces_computed;
-
+        if (world_hit_aabb(current_ray, 0.001, infinity, hit_rec)) {
             Ray scattered;
             vec3 attenuation;
             if (scatter(state, current_ray, hit_rec, attenuation, scattered)) {
@@ -258,7 +321,44 @@ vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
             return accumulated_color * mix(vec3(1.0, 1.0, 1.0), vec3(0.5, 0.7, 1.0), blend);
         }
     }
-    return vec3(0.0); // black if max depth reached
+    return accumulated_color; // max depth reached
+}
+bool ray_contributes_to_color(vec3 color, float threshold) {
+    return length(color) > threshold;  // Only continue if the color is above the threshold
+}
+
+// early ray termination included
+vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
+    vec3 accumulated_color = vec3(1.0);
+    
+    Ray current_ray;
+    current_ray.origin = ray.origin;
+    current_ray.direction = ray.direction;
+
+    for (int bounce = 0; bounce < max_bounces; bounce++) {
+        HitRecord hit_rec;
+        if (world_hit_aabb(current_ray, 0.001, infinity, hit_rec)) {
+            Ray scattered;
+            vec3 attenuation;
+            if (scatter(state, current_ray, hit_rec, attenuation, scattered)) {
+                accumulated_color *= attenuation;
+                current_ray = scattered;
+                vec3 acc = accumulated_color;
+
+                // Early termination if contribution is below a threshold
+                if (!ray_contributes_to_color(accumulated_color, 0.01))
+                    break;  // Stop further bounces
+            } 
+            else {
+                break;
+            }
+        } else {
+            vec3 unit_direction = normalize(current_ray.direction);
+            float blend = 0.5 * (unit_direction.y + 1.0);
+            return accumulated_color * mix(vec3(1.0, 1.0, 1.0), vec3(0.5, 0.7, 1.0), blend);
+        }
+    }
+    return accumulated_color; // Default black if max depth reached
 }
 
 vec3 sample_square(uint state) {
@@ -302,25 +402,15 @@ vec2 sample_disk(inout uint state) {
     float r, theta;
     if (abs(x) > abs(y)) {
         r = x;
-        theta = (3.14159265 / 4.0) * (y / x);
+        theta = (PI / 4.0) * (y / x);
     } else {
         r = y;
-        theta = (3.14159265 / 2.0) - (3.14159265 / 4.0) * (x / y);
+        theta = (PI / 2.0) - (PI / 4.0) * (x / y);
     }
 
     return r * vec2(cos(theta), sin(theta));
 }
 
-// in: “pass by value”; if the parameter’s value is changed in the function, the actual parameter from the calling statement is unchanged.
-
-// out: “pass by reference”; the parameter is not initialized when the function is called; any changes in the parameter’s value changes the actual parameter from the calling statement.
-
-// inout: the parameter’s value is initialized by the calling statement and any changes made by the function change the actual parameter from the calling statement.
-
-//Array of vec4 for sphere center and radius
-//Array of materials for spheres which matches with index of the sphere
-//vec4 representation for materials
-//array of int that reprenset which mats ex: 1=>metal 2=>lambertian 3=>dielectric
 
 void main() {
     uint x = gl_GlobalInvocationID.x;
@@ -332,81 +422,40 @@ void main() {
 
     uint random_state = time * (x + y * 36) + 1;
 
-    // float imageAspectRatio = float(width) / float(height);
-
-    // // Camera settings
-    // float focal_length = 1.0;
-    // float viewport_height = 2.0;
-    // float viewport_width = float(width) / float(height) * viewport_height;
-    // vec3 camera_center = vec3(0.0, 0.0, 0.0); 
-
-    // // Viewport basis vectors
-    // vec3 viewport_u = vec3(viewport_width, 0, 0);
-    // vec3 viewport_v = vec3(0, viewport_height, 0); 
-
-    // vec3 pixel_delta_u = viewport_u / float(width);
-    // vec3 pixel_delta_v = viewport_v / float(height);
-
-    // // Calculate pixel position
-    // vec3 viewport_upper_left = camera_center - vec3(0, 0, focal_length) - viewport_u / 2 - viewport_v / 2;
-    // vec3 pixel_center = viewport_upper_left + float(x) * pixel_delta_u + float(y) * pixel_delta_v;
-    // vec3 pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
-
-    // Construct the ray
-    // Ray ray;
-    // ray.origin = camera_center;
-    // ray.direction = normalize(pixel_center - camera_center);
-
-    uint samples_per_pixel = 8;
+    uint samples_per_pixel = 1;
     uint max_bounces = 8;
 
-    // vec3 pixel_color = vec3(0.0, 0.0, 0.0);
-    // for (int s = 0; s < samples_per_pixel; s++){
-    //     vec3 offset = sample_square(random_state);
-    //     vec3 pixel_sample = pixel00_loc + ((x + offset.x) * pixel_delta_u)+ ((y + offset.y) * pixel_delta_v);
-
-    //     Ray ray;
-    //     ray.origin = camera_center;
-    //     ray.direction = normalize(pixel_sample - camera_center);
-    //     pixel_color += ray_color(ray, max_bounces, random_state);
-    // }
+    vec2 inv_resolution = 1.0 / vec2(width, height);
+    vec3 camera_pos = cameraPosition.xyz;
+    vec3 camera_right = vec3(invViewMatrix[0].xyz);
+    vec3 camera_up    = vec3(invViewMatrix[1].xyz);
+    float lens_radius = tan(radians(defocus_angle * 0.5)) * focus_distance;
 
     vec3 pixel_color = vec3(0.0);
+
     for (int s = 0; s < samples_per_pixel; ++s) {
+        // Subpixel jitter
         vec2 offset = sample_square(random_state).xy;  
-        vec2 uv = (vec2(pixel_coords) + offset) / vec2(width, height);
-        vec2 ndc = uv * 2.0 - 1.0; // Normalized Device Coords
+        vec2 uv = (vec2(pixel_coords) + offset) * inv_resolution;
+        vec2 ndc = uv * 2.0 - 1.0;
 
+        // World-space direction (view → clip → world)
+        vec4 view_pos = invProjMatrix * vec4(ndc, -1.0, 1.0);
+        view_pos /= view_pos.w;
+        vec4 world_pos = invViewMatrix * view_pos;
+        vec3 dir = normalize(world_pos.xyz - camera_pos);
 
-        vec4 clip = vec4(ndc, -1.0, 1.0); // NDC -> clip
-        vec4 view = invProjMatrix * clip; // Clip -> View
-        view /= view.w;
+        // Sample lens disk and shift ray origin
+        vec2 lens_sample = sample_disk(random_state) * lens_radius;
+        vec3 lens_offset = camera_right * lens_sample.x + camera_up * lens_sample.y;
+        vec3 origin = camera_pos + lens_offset;
 
-        vec4 world = invViewMatrix * view; // View -> World
-        vec3 dir = normalize(world.xyz - cameraPosition.xyz);
-
-        vec3 origin = cameraPosition.xyz;
-
-        // Depth of field
-        if (defocus_angle > 0.0) {
-            // Sample lens disk
-            vec2 lens_uv = sample_disk(random_state) * tan(radians(defocus_angle * 0.5)) * focus_distance;
-
-            // Reconstruct camera basis from inverse view matrix
-            vec3 right = vec3(invViewMatrix[0].xyz);
-            vec3 up    = vec3(invViewMatrix[1].xyz);
-
-            // Offset ray origin by aperture sample
-            vec3 offset = right * lens_uv.x + up * lens_uv.y;
-            origin += offset;
-
-            // Recompute direction toward focus plane
-            vec3 focal_point = cameraPosition.xyz + dir * focus_distance;
-            dir = normalize(focal_point - origin);
-        }
+        // Recompute ray direction toward focal point
+        vec3 focal_point = camera_pos + dir * focus_distance;
+        dir = normalize(focal_point - origin);
 
         Ray ray;
-        ray.origin = cameraPosition.xyz;
+        ray.origin = origin;
         ray.direction = dir;
 
         pixel_color += ray_color(ray, max_bounces, random_state);
