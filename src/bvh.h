@@ -82,7 +82,7 @@ int buildBVH(std::vector<BVHNode>& bvh, const std::vector<Sphere>& spheres, cons
 
     // Compute bounding box for all spheres in this node
     AABB box = aabbs[sphereIndices[0]];
-    for (int i = 1; i < sphereIndices.size(); i++) {
+    for (size_t i = 1; i < sphereIndices.size(); i++) {
         box = surroundingBox(box, aabbs[sphereIndices[i]]);
     }
 

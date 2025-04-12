@@ -78,17 +78,6 @@ public:
         return program;
     }
 
-    void reloadShader(const std::filesystem::path& path)
-    {
-        uint32_t newShader = loadShader(path);
-
-        if(newShader != -1)
-        {
-            glDeleteProgram(ID);
-            ID = newShader;
-        }
-    }
-
     // activate the shader
     // ------------------------------------------------------------------------
     void use() 

@@ -4,8 +4,8 @@ struct CameraSettings
 {
     float aspect_ratio = 1.0f;
     int image_width = 100;
-    int samples_per_pixel = 10;
-    int max_depth = 10;
+    int samples_per_pixel = 1;
+    int max_bounces = 8;
     float vfov = 90;
     float focus_dist = 10.0;
     float defocus_angle = 0.0;
@@ -57,6 +57,7 @@ class Camera {
         float lookSpeed{1.1f};
 
         Camera(CameraSettings &settings) {
+            this->settings = settings;
             data.lookfrom = glm::vec4(settings.lookfrom, 1.0f);
             image_width = settings.image_width;
             image_height = (int)(settings.image_width / settings.aspect_ratio);
@@ -66,8 +67,8 @@ class Camera {
             right = glm::normalize(glm::cross(forward, settings.vup));
             up = glm::cross(right, forward); // ensures orthonormal
             
-            yaw = -90.0f; // initialized looking toward -Z
-            pitch = 0.0f;
+            yaw = -165.0f; // initialized looking toward -Z
+            pitch = -5.0f;
 
             data.view = glm::lookAt(settings.lookfrom, settings.lookat, settings.vup);
             data.projection = glm::perspective(glm::radians(settings.vfov), settings.aspect_ratio, 0.1f, 1000.0f);

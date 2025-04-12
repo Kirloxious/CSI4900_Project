@@ -1,4 +1,4 @@
 @echo off
-cmake --preset=debug-windows
-cmake --build --preset=debug-windows
-start "" out/build/debug/main.exe
+cmake --preset=release-windows
+cmake --build --preset=release-windows
+start cmd /k ".\out\build\release\main.exe" 

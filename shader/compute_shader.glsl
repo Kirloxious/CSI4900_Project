@@ -4,15 +4,32 @@
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
+/* Uniforms */
+
 layout(rgba32f, location = 0)  readonly uniform image2D srcImage;
 layout(rgba32f, location = 1) writeonly uniform image2D destImage;
 layout(location = 3) uniform int time;
 layout(location = 4) uniform int frameIndex;
 layout(location = 5) uniform vec2 imageDimensions;
+layout(location = 6) uniform int num_objects;
+layout(location = 7) uniform int bvh_size;
+layout(location = 8) uniform int root_index;
+layout(location = 9) uniform int samples_per_pixel;
+layout(location = 10) uniform int max_bounces;
+
+/* Structs */
 
 struct Ray {
     vec3 origin;
     vec3 direction;
+};
+
+struct HitRecord {
+    vec3 point;
+    vec3 normal;
+    uint mat_index;
+    float t;
+    bool front_face;
 };
 
 struct Sphere{
@@ -23,8 +40,11 @@ struct Sphere{
 
 
 struct Material{
-    vec4 color;
+    vec3 color;
+    float fuzz;
+    vec3 emission;
     float refractive_index;
+    float type;
 };
 
 struct BVHNodeFlat {
@@ -33,9 +53,8 @@ struct BVHNodeFlat {
     ivec4 meta; // x: left, y: right, z: sphereIndex, w: unused
 };
 
-uniform int num_objects;
-uniform int bvh_size;
-uniform int root_index;
+
+/* Scnene Buffers */
 
 layout(std430, binding = 0) buffer SpheresBuffer{
     Sphere spheres[];
@@ -59,10 +78,18 @@ layout(std430, binding = 3) buffer BVHBuffer {
     BVHNodeFlat nodes[];
 };
 
+/* Constants */
 
+const float MAT_LAMBERTIAN = 0.0;
+const float MAT_METAL = 1.0;
+const float MAT_DIELECTRIC = 2.0;
+const float MAT_EMISSIVE = 3.0;
 
 const float infinity = 1./0.;
 const float PI = 3.1415926535897932384626433832795;
+
+
+/* Helper Math Functions */
 
 // The state must be initialized to non-zero value
 uint XOrShift32(inout uint state)
@@ -106,29 +133,13 @@ vec3 random_on_hemisphere(uint state, vec3 normal) {
 }
 
 
-
-
-struct HitRecord {
-    vec3 point;
-    vec3 normal;
-    uint mat_index;
-    float t;
-    bool front_face;
-};
-
-
-
-/** Hit record functions **/
+/** Intersection functions **/
 
 bool set_face_normal(in Ray ray, in vec3 outward_normal, inout HitRecord hit_rec) {
     hit_rec.front_face = dot(ray.direction, outward_normal) < 0.0;
     hit_rec.normal = hit_rec.front_face ? outward_normal : -outward_normal;
     return true;
 }
-
-/** End Hit record **/
-
-/** Intersection functions **/
 
 bool hit_sphere(in Ray r, in Sphere s, float ray_tmin, float ray_tmax, inout HitRecord hit_rec) {
     vec3 oc = s.position - r.origin; 
@@ -162,7 +173,7 @@ bool hit_sphere(in Ray r, in Sphere s, float ray_tmin, float ray_tmax, inout Hit
 
 /** Ray functions **/
 
-// Brute force intersection 
+// Brute force ray-sphere intersection
 bool world_hit(in Ray r, in float ray_tmin,  in float ray_tmax, inout HitRecord hit_rec) {
     HitRecord temp_rec;
     bool hit_anything = false;
@@ -193,7 +204,7 @@ bool intersect_aabb(in Ray r, in vec3 min_b, in vec3 max_b, in vec3 inv_dir) {
     return t_near < t_far && t_far > 0.0f;
 }
 
-// BVH traversal intersection
+// BVH traversal intersection using stack
 bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRecord hit_rec) {
     vec3 inv_dir = 1.0f / r.direction; 
 
@@ -237,6 +248,7 @@ bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRec
     return hit_anything;
 }
 
+// BVH traversal intersection using pointers
 bool world_hit_aabb_stackless(in Ray r, in float tMin, in float tMax, inout HitRecord hit) {
     vec3 invDir = 1.0 / r.direction;
     int idx = root_index;
@@ -259,7 +271,7 @@ bool world_hit_aabb_stackless(in Ray r, in float tMin, in float tMax, inout HitR
             }
             else {
                 // Not a leaf: move to left child
-                idx = node.meta.x; // assume left child is stored here
+                idx = node.meta.x; 
             }
         } else {
             idx = node.meta.w; // skip to next node if AABB missed
@@ -277,94 +289,112 @@ float reflectance(float cosine, float ref_idx) {
     return r0 + (1.0 - r0) * pow(1.0 - cosine, 5.0);
 }
 
-bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 attenuation, inout Ray scattered) {
-    vec3 reflected;
-    float fuzz = mats[hit_rec.mat_index].color.a;
+bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 matColor, inout Ray scattered) {
+    Material mat = mats[hit_rec.mat_index];
+    float type = mat.type;
 
-    // Lambertian scatter
-    if (fuzz == -1.0) {
-        reflected = hit_rec.normal + random_unit_vector(state);   
-        // Catch degenerate rays
-        if(length(reflected) < 0.0001) 
-            reflected = hit_rec.normal; 
+    if (type == MAT_EMISSIVE) {
+        // Emissive materials don't scatter
+        matColor = mat.color;
+        return false;
     }
 
-    // Metal reflect with fuzziness
-    else if (fuzz >= 0.0 && fuzz <= 1.0) {
-        reflected = reflect(ray_in.direction, hit_rec.normal);
-        reflected = normalize(reflected) + fuzz * random_unit_vector(state);
-    } 
+    if (type == MAT_LAMBERTIAN) {
+        vec3 scatter_dir = hit_rec.normal + random_unit_vector(state);
 
-    // Dielectric refraction
-    else {
-        attenuation = vec3(1.0, 1.0, 1.0);
+        if (length(scatter_dir) < 0.0001)
+            scatter_dir = hit_rec.normal;
 
-        float ri = hit_rec.front_face ? (1.0 / mats[hit_rec.mat_index].refractive_index)
-                                    : mats[hit_rec.mat_index].refractive_index;
-
-        vec3 unit_direction = normalize(ray_in.direction);
-        vec3 normal = hit_rec.normal;  // ensure normalized
-
-        float cos_theta = clamp(dot(-unit_direction, normal), -1.0, 1.0);
-        float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
-
-        bool cannot_refract = ri * sin_theta > 1.0;
-
-        vec3 direction;
-        if (cannot_refract || reflectance(cos_theta, ri) > RandomUnilateral(state)) {
-            direction = reflect(unit_direction, normal);
-        } else {
-            direction = refract(unit_direction, normal, ri);
-        }
-
-        // Catch degenerate rays
-        if(length(direction) < 0.0001) 
-            direction = normal; 
-
-        direction = normalize(direction); 
-        scattered = Ray(hit_rec.point, direction);
+        scattered = Ray(hit_rec.point, normalize(scatter_dir));
+        matColor = mat.color;
         return true;
     }
 
-    reflected = normalize(reflected);   
-    scattered = Ray(hit_rec.point, reflected);
-    attenuation = mats[hit_rec.mat_index].color.rgb;
-    return true;
+    if (type == MAT_METAL) {
+        vec3 reflected = reflect(normalize(ray_in.direction), hit_rec.normal);
+        reflected += mat.fuzz * random_unit_vector(state); // .a = fuzz
+        scattered = Ray(hit_rec.point, normalize(reflected));
+        matColor = mat.color;
+        return (dot(scattered.direction, hit_rec.normal) > 0.0);
+    }
+
+    if (type == MAT_DIELECTRIC) {
+        matColor = vec3(1.0);
+        float ri = hit_rec.front_face ? (1.0 / mat.refractive_index) : mat.refractive_index;
+
+        vec3 unit_dir = normalize(ray_in.direction);
+        float cos_theta = clamp(dot(-unit_dir, hit_rec.normal), 0.0, 1.0);
+        float sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+
+        bool cannot_refract = ri * sin_theta > 1.0;
+        vec3 direction;
+        if (cannot_refract || reflectance(cos_theta, ri) > RandomUnilateral(state))
+            direction = reflect(unit_dir, hit_rec.normal);
+        else
+            direction = refract(unit_dir, hit_rec.normal, ri);
+
+        // Catch degenerate rays
+        if(length(direction) < 0.0001) 
+            direction = hit_rec.normal; 
+
+        scattered = Ray(hit_rec.point, normalize(direction));
+        return true;
+    }
+
+    // Default: absorb
+    return false;
+}
+
+bool ray_contributes_to_color(vec3 color, float threshold) {
+    return length(color) > threshold;  // Only continue if the color is above the threshold
 }
 
 // Original ray color
 vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
-    vec3 accumulated_color  = vec3(1.0);
+    vec3 accumulated_color = vec3(1.0);
+    vec3 radiance = vec3(0.0);
     
     Ray current_ray;
     current_ray.origin = ray.origin;
     current_ray.direction = ray.direction;
 
-    for (int i = 0; i < max_bounces; i++) {
+    for (int bounce = 0; bounce < max_bounces; bounce++) {
         HitRecord hit_rec;
-        if (world_hit_aabb_stackless(current_ray, 0.001, infinity, hit_rec)) {
+        if (world_hit(current_ray, 0.001, infinity, hit_rec)) {
             Ray scattered;
-            vec3 attenuation;
-            if (scatter(state, current_ray, hit_rec, attenuation, scattered)) {
-                accumulated_color *= attenuation;
+            vec3 matColor;
+            vec3 emitted = mats[hit_rec.mat_index].emission;
+
+            if (scatter(state, current_ray, hit_rec, matColor, scattered)) {
+                accumulated_color *= matColor;
                 current_ray = scattered;
+
+                // Early termination if contribution is below a threshold
+                if (!ray_contributes_to_color(accumulated_color, 0.01))
+                    break;  // Stop further bounces
+            } 
+            else { // no scatter
+                radiance += accumulated_color * matColor * emitted;
+                break;
             }
-            
-        } else {
+        } else { // no hit
             vec3 unit_direction = normalize(current_ray.direction);
             float blend = 0.5 * (unit_direction.y + 1.0);
-            return accumulated_color * mix(vec3(1.0, 1.0, 1.0), vec3(0.5, 0.7, 1.0), blend);
+            // vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
+            vec3 background_color = vec3(0.05);
+
+            radiance += accumulated_color * background_color;
+            break;
         }
     }
-    return accumulated_color; // max depth reached
+    return radiance; // max depth reached
 }
-bool ray_contributes_to_color(vec3 color, float threshold) {
-    return length(color) > threshold;  // Only continue if the color is above the threshold
-}
+
 
 // early ray termination included
 vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
     vec3 accumulated_color = vec3(1.0);
+    vec3 radiance = vec3(0.0);
     
     Ray current_ray;
     current_ray.origin = ray.origin;
@@ -374,31 +404,38 @@ vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
         HitRecord hit_rec;
         if (world_hit_aabb_stackless(current_ray, 0.001, infinity, hit_rec)) {
             Ray scattered;
-            vec3 attenuation;
-            if (scatter(state, current_ray, hit_rec, attenuation, scattered)) {
-                accumulated_color *= attenuation;
+            vec3 matColor;
+            vec3 emitted = mats[hit_rec.mat_index].emission;
+
+            if (scatter(state, current_ray, hit_rec, matColor, scattered)) {
+                accumulated_color *= matColor;
                 current_ray = scattered;
-                vec3 acc = accumulated_color;
 
                 // Early termination if contribution is below a threshold
                 if (!ray_contributes_to_color(accumulated_color, 0.01))
                     break;  // Stop further bounces
             } 
-            else {
+            else { // no scatter
+                radiance += accumulated_color * matColor * emitted;
                 break;
             }
-        } else {
+        } else { // no hit
             vec3 unit_direction = normalize(current_ray.direction);
             float blend = 0.5 * (unit_direction.y + 1.0);
-            return accumulated_color * mix(vec3(1.0, 1.0, 1.0), vec3(0.5, 0.7, 1.0), blend);
+            // vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
+            vec3 background_color = vec3(0.05);
+
+            radiance += accumulated_color * background_color;
+            break;
         }
     }
-    return accumulated_color; // Default black if max depth reached
+    return radiance; // max depth reached
 }
+
 
 vec3 sample_square(uint state) {
     // Returns the vector to a random point in the [-.5,-.5]-[+.5,+.5] unit square.
-    return vec3(RandomBilateral(state) - 0.5, RandomBilateral(state) - 0.5, 0);
+    return vec3(RandomBilateral(state) - 0.5, RandomBilateral(state) - 0.5 , 0);
 }
 
 
@@ -456,17 +493,13 @@ void main() {
 
     uint random_state = time * (x + y * 36) + 1;
 
-    uint samples_per_pixel = 1;
-    uint max_bounces = 8;
-
-
     vec2 inv_resolution = 1.0 / vec2(width, height);
     vec3 camera_right = vec3(invViewMatrix[0].xyz);
     vec3 camera_up    = vec3(invViewMatrix[1].xyz);
     float lens_radius = tan(radians(defocus_angle * 0.5)) * focus_distance;
 
     vec3 pixel_color = vec3(0.0);
-
+    
     for (int s = 0; s < samples_per_pixel; ++s) {
         // Subpixel jitter
         vec2 offset = sample_square(random_state).xy;  
@@ -492,8 +525,9 @@ void main() {
         ray.origin = origin;
         ray.direction = dir;
 
-        pixel_color += ray_color(ray, max_bounces, random_state);
+        pixel_color += ray_color2(ray, max_bounces, random_state);
     }
+
 
     vec3 prevColor = imageLoad(srcImage, pixel_coords).xyz;
 

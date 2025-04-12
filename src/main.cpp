@@ -20,13 +20,9 @@ static const std::filesystem::path computeShaderPath = "shader/compute_shader.gl
 
 static void ErrorCallback(int error, const char* description)
 {
-	std::cerr << "Error: " << description << std::endl;
+	std::cerr << "Error "<< error << ": " << description << std::endl;
 }
 
-static double clockToMilliseconds(clock_t ticks){
-    // units/(units/time) => time (seconds) * 1000 = milliseconds
-    return (ticks/(double)CLOCKS_PER_SEC)*1000.0;
-}
 
 float randomFloat() {
     static std::mt19937 generator(std::random_device{}()); // internal state but no manual seed
@@ -43,8 +39,8 @@ int main() {
     camSettings.aspect_ratio = 16.0f / 9.0f;
     camSettings.image_width = 1200;
     
-    camSettings.samples_per_pixel = 10;
-    camSettings.max_depth = 10;
+    camSettings.samples_per_pixel = 1;
+    camSettings.max_bounces = 8;
     
     camSettings.vfov = 20.0;
     camSettings.focus_dist = 10.0;
@@ -67,7 +63,8 @@ int main() {
     glfwSwapInterval(0); // disable vsync
 
     std::cout << "OpenGL version: " << glGetString(GL_VERSION) << std::endl;
-    
+    std::cout << "Image Dimensions: " << camera.image_width << " x " << camera.image_height << std::endl;
+
     // World scene
 
     // Spheres format is [center_x, center_y, center_z, radius, material_index]
@@ -94,8 +91,6 @@ int main() {
     // Ground sphere and mat
     materials.push_back(Lambertian(glm::vec3(0.5f, 0.5f, 0.5f)));
     spheres.push_back(createSphere(glm::vec3(0.0f, -1000.0f, 0.0f), 1000.0f, materials.size() - 1));
-
-    std::cout << randomFloat() << std::endl;
 
     for(int a = -11; a < 11; a++) {
         for(int b = -11; b < 11; b++) {
@@ -133,13 +128,15 @@ int main() {
     
     materials.push_back(Metal(glm::vec3(0.7f, 0.6f, 0.5f), 0.0f));
     spheres.push_back(createSphere(glm::vec3(4.0f, 1.0f, 0.0f), 1.0f, materials.size() - 1));
+
+    materials.push_back(Emissive(glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(15.0f, 6.0f, 2.0f)));
+    spheres.push_back(createSphere(glm::vec3(-8.0f, 1.0f, 0.0f), 1.0f, materials.size() - 1));
     
     std::vector<AABB> spheresAABBS;
     for (const auto& sphere : spheres) {
         spheresAABBS.push_back(computeAABB(sphere));
     }
     std::cout << "Number of spheres: " << spheres.size() << std::endl;
-    std::cout << spheresAABBS.size() << std::endl;
 
     std::vector<BVHNode> bvhNodes;
     std::vector<int> sphereIndices(spheres.size());
@@ -151,16 +148,8 @@ int main() {
     bvhFlat.reserve(bvhNodes.size());
     flattenBVH(root, bvhNodes, bvhFlat, -1);
 
-    // for (const auto& node : bvhNodes) {
-    //     BVHNodeFlat flat;
-    //     flat.aabbMin = glm::vec4(node.aabb.min, 0.0f);
-    //     flat.aabbMax = glm::vec4(node.aabb.max, 0.0f);
-    //     flat.meta = glm::ivec4(node.left, node.right, node.sphereIndex, 0);
-    //     bvhFlat.push_back(flat);
-    // }
-
-    std::cout << "Number of BVH nodes: " << bvhNodes.size() << std::endl;
-    std::cout << "Root index: " << root << std::endl;
+    // std::cout << "Number of BVH nodes: " << bvhNodes.size() << std::endl;
+    // std::cout << "Root index: " << root << std::endl;
 
 
     // Create and bind SSBO for spheres
@@ -203,6 +192,8 @@ int main() {
     compute.setVec2("imageDimensions", glm::vec2(camera.image_width, camera.image_height));
     compute.setInt("bvh_size", bvhNodes.size());
     compute.setInt("root_index", root);
+    compute.setInt("samples_per_pixel", camera.settings.samples_per_pixel);
+    compute.setInt("max_bounces", camera.settings.max_bounces);
     
 
     Texture texture = createTexture(window.m_Width, window.m_Height);
@@ -224,13 +215,13 @@ int main() {
             frameIndex = 0; // resets the frame accumulation in compute if camera moved last frame
             camera.moving = false;
         }
-        // camera.data.view = glm::rotate(camera.data.view, glm::radians(0.01f), glm::vec3(0.0f, 1.0f, 0.0f));
+
         camera.update(window.m_Window, deltaTime, camera);
-        
         camera.updateInvMatrices();
         glBindBuffer(GL_UNIFORM_BUFFER, cam_ubo);
         glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CameraData), &camera.data);
         glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
         // Compute 
         {
             ++frameIndex;
@@ -273,7 +264,7 @@ int main() {
 
         
         if (currentTime - timer >= 1.0) {
-            std::cout << "FPS: " << frameCount << " | Frame Time: " << (1000.0 / float(frameCount)) << " ms" << " | Compute Shader Time: " << (executionTime / 1e6) << " ms" << std::endl;
+            std::cout << "FPS: " << frameCount << " | Frame Time: " << (1000.0 / float(frameCount)) << " ms" << " | Compute Time: " << (executionTime / 1e6) << " ms" << std::endl;
             frameCount = 0;
             timer = currentTime;
         }

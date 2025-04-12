@@ -4,6 +4,7 @@ project(main)
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_FLAGS "-Wall -Wextra")
 
 # Source files
 file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
