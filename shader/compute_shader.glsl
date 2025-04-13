@@ -50,7 +50,7 @@ struct Material{
 struct BVHNodeFlat {
     vec4 aabbMin;
     vec4 aabbMax;
-    ivec4 meta; // x: left, y: right, z: sphereIndex, w: unused
+    ivec4 meta; // x: left, y: right, z: sphereIndex, w: next node
 };
 
 
@@ -112,7 +112,7 @@ float RandomBilateral(inout uint state) {
 }
 
 vec3 random_vec3(uint state) {
-    return vec3(RandomUnilateral(state), RandomUnilateral(state), RandomUnilateral(state));
+    return vec3(RandomBilateral(state), RandomBilateral(state), RandomBilateral(state));
 }
 
 
@@ -380,8 +380,8 @@ vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
         } else { // no hit
             vec3 unit_direction = normalize(current_ray.direction);
             float blend = 0.5 * (unit_direction.y + 1.0);
-            // vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
-            vec3 background_color = vec3(0.05);
+            vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
+            // vec3 background_color = vec3(0.05);
 
             radiance += accumulated_color * background_color;
             break;
@@ -422,8 +422,8 @@ vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
         } else { // no hit
             vec3 unit_direction = normalize(current_ray.direction);
             float blend = 0.5 * (unit_direction.y + 1.0);
-            // vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
-            vec3 background_color = vec3(0.05);
+            vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
+            // vec3 background_color = vec3(0.05);
 
             radiance += accumulated_color * background_color;
             break;

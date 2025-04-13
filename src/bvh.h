@@ -12,6 +12,11 @@ struct AABB {
     glm::vec3 center() const {
         return (min + max) * 0.5f;
     }
+
+    float surfaceArea() const {
+        glm::vec3 d = max - min;
+        return 2.0f * (d.x * d.y + d.y * d.z + d.z * d.x);
+    }
 };
 
 AABB computeAABB(const Sphere& s) {
@@ -39,6 +44,23 @@ struct alignas(16) BVHNodeFlat {
     glm::ivec4 meta;     // .x = left, .y = right, .z = sphereIndex, .w = unused
 };
 
+AABB computeSceneAABB(const std::vector<Sphere>& spheres) {
+    glm::vec3 minPoint(std::numeric_limits<float>::max());
+    glm::vec3 maxPoint(std::numeric_limits<float>::lowest());
+
+    for (const Sphere& sphere : spheres) {
+        glm::vec3 center = sphere.position;
+
+        minPoint = glm::min(minPoint, center);
+        maxPoint = glm::max(maxPoint, center);
+    }
+
+    AABB bounds;
+    bounds.min = minPoint;
+    bounds.max = maxPoint;
+    return bounds;
+}
+
 int findMaxVarianceAxis(const std::vector<int> &sphereIndices, const std::vector<AABB> &aabbs){
     float mean[3] = {0}, var[3] = {0};
     for (int idx : sphereIndices) {
@@ -64,6 +86,7 @@ int findMaxVarianceAxis(const std::vector<int> &sphereIndices, const std::vector
     return axis;
 }
 
+// Split along the longest axis
 int longestAxis(const AABB &box){
     glm::vec3 extent = box.max - box.min;
     int axis;
@@ -76,6 +99,53 @@ int longestAxis(const AABB &box){
 
     return axis;
 }
+
+
+float computeSAHCost(int numLeft, float leftArea, int numRight, float rightArea) {
+    // Constant traversal cost = 1.0, intersection cost = 1.0
+    return 1.0f + (leftArea * numLeft + rightArea * numRight);
+}
+
+// SAH effectivly reduces the number of interesection tests by splitting the aabb into optimal subboxes.
+// It does this by finding the best axis to split on using the surface area of the aabbs
+int findBestSAHSplit(const std::vector<AABB>& aabbs, const std::vector<int>& indices, int& splitAxis, int& splitIndex) {
+    float bestCost = FLT_MAX;
+
+    // Iterate over all axis
+    for (int axis = 0; axis < 3; axis++) {
+        // Sort by axis 
+        std::vector<int> sorted = indices;
+        std::sort(sorted.begin(), sorted.end(), [&](int a, int b) {
+            return aabbs[a].center()[axis] < aabbs[b].center()[axis];
+        });
+
+        // Compute left and right boxes on current axis
+        std::vector<AABB> leftBoxes(sorted.size()), rightBoxes(sorted.size());
+        AABB leftBox = aabbs[sorted[0]];
+        for (int i = 1; i < sorted.size(); ++i)
+            leftBoxes[i] = leftBox = surroundingBox(leftBox, aabbs[sorted[i]]);
+
+        AABB rightBox = aabbs[sorted.back()];
+        for (int i = (int)sorted.size() - 2; i >= 0; --i)
+            rightBoxes[i] = rightBox = surroundingBox(rightBox, aabbs[sorted[i]]);
+
+        // Compute the SAH cost which uses the surface area of the left and right boxes
+        for (int i = 1; i < sorted.size(); ++i) {
+            float leftArea = leftBoxes[i].surfaceArea();
+            float rightArea = rightBoxes[i].surfaceArea();
+
+            float cost = computeSAHCost(i, leftArea, sorted.size() - i, rightArea);
+            if (cost < bestCost) {
+                bestCost = cost;
+                splitAxis = axis;
+                splitIndex = i;
+            }
+        }
+    }
+
+    return splitAxis;
+}
+
 
 int buildBVH(std::vector<BVHNode>& bvh, const std::vector<Sphere>& spheres, const std::vector<AABB>& aabbs, std::vector<int> sphereIndices) {
     BVHNode node;
@@ -98,14 +168,24 @@ int buildBVH(std::vector<BVHNode>& bvh, const std::vector<Sphere>& spheres, cons
     // Split: sort by axis
     // int axis = findMaxVarianceAxis(sphereIndices, aabbs);
     // int axis = longestAxis(box);
-    int axis = rand() % 3;
+    // int axis = rand() % 3;
+    // std::sort(sphereIndices.begin(), sphereIndices.end(), [&](int a, int b) {
+    //     return aabbs[a].center()[axis] < aabbs[b].center()[axis];
+    // });
+
+    // int mid = sphereIndices.size() / 2;
+    // std::vector<int> leftIndices(sphereIndices.begin(), sphereIndices.begin() + mid);
+    // std::vector<int> rightIndices(sphereIndices.begin() + mid, sphereIndices.end());
+
+    int axis, splitIndex;
+    findBestSAHSplit(aabbs, sphereIndices, axis, splitIndex);
+
     std::sort(sphereIndices.begin(), sphereIndices.end(), [&](int a, int b) {
         return aabbs[a].center()[axis] < aabbs[b].center()[axis];
     });
 
-    int mid = sphereIndices.size() / 2;
-    std::vector<int> leftIndices(sphereIndices.begin(), sphereIndices.begin() + mid);
-    std::vector<int> rightIndices(sphereIndices.begin() + mid, sphereIndices.end());
+    std::vector<int> leftIndices(sphereIndices.begin(), sphereIndices.begin() + splitIndex);
+    std::vector<int> rightIndices(sphereIndices.begin() + splitIndex, sphereIndices.end());
 
     int leftChild = buildBVH(bvh, spheres, aabbs, leftIndices);
     int rightChild = buildBVH(bvh, spheres, aabbs, rightIndices);
@@ -114,6 +194,82 @@ int buildBVH(std::vector<BVHNode>& bvh, const std::vector<Sphere>& spheres, cons
     node.right = rightChild;
     bvh.push_back(node);
     return bvh.size() - 1;
+}
+struct MortonPrimitive{
+    uint32_t code;
+    int index;
+};
+
+uint32_t expandBits(uint32_t v) {
+    v = (v * 0x00010001u) & 0xFF0000FFu;
+    v = (v * 0x00000101u) & 0x0F00F00Fu;
+    v = (v * 0x00000011u) & 0xC30C30C3u;
+    v = (v * 0x00000005u) & 0x49249249u;
+    return v;
+}
+
+uint32_t morton3D(float x, float y, float z) {
+    x = glm::clamp(x * 1024.0f, 0.0f, 1023.0f);
+    y = glm::clamp(y * 1024.0f, 0.0f, 1023.0f);
+    z = glm::clamp(z * 1024.0f, 0.0f, 1023.0f);
+
+    return (expandBits((uint32_t)x) << 2) |
+            (expandBits((uint32_t)y) << 1) |
+            expandBits((uint32_t)z);
+}
+
+
+int findSplit(const std::vector<MortonPrimitive>& mortonPrims, int first, int last) {
+    uint32_t firstCode = mortonPrims[first].code;
+    uint32_t lastCode  = mortonPrims[last - 1].code; 
+
+    if (firstCode == lastCode) {
+        return (first + last) >> 1;
+    }
+
+    int commonPrefix = __builtin_clz(firstCode ^ lastCode);
+
+    int split = first;
+    int step = last - first;
+
+    while (step > 1) {
+        int mid = split + (step >> 1);
+        uint32_t midCode = mortonPrims[mid].code;
+        int midPrefix = __builtin_clz(firstCode ^ midCode);
+
+        if (midPrefix > commonPrefix)
+            split = mid;
+
+        step >>= 1;
+    }
+
+    return split;
+}
+
+
+int buildLBVH(std::vector<BVHNode>& nodes, const std::vector<AABB>& aabbs, const std::vector<MortonPrimitive>& mortonPrims, int start, int end) {
+    if (end - start == 1) {
+        // Leaf node
+        BVHNode leaf;
+        leaf.sphereIndex = mortonPrims[start].index;
+        leaf.left = leaf.right = -1;
+        leaf.aabb = aabbs[leaf.sphereIndex];
+        nodes.push_back(leaf);
+        return nodes.size() - 1;
+    }
+
+    int split = findSplit(mortonPrims, start, end); // end is exclusive
+
+    int left  = buildLBVH(nodes, aabbs, mortonPrims, start, split + 1);
+    int right = buildLBVH(nodes, aabbs, mortonPrims, split + 1, end);
+
+    BVHNode node;
+    node.left = left;
+    node.right = right;
+    node.sphereIndex = -1;
+    node.aabb = surroundingBox(nodes[left].aabb, nodes[right].aabb);
+    nodes.push_back(node);
+    return nodes.size() - 1;
 }
 
 int flattenBVH(int nodeIndex, const std::vector<BVHNode>& nodes, std::vector<BVHNodeFlat>& flatNodes, int nextAfterSubtree) {

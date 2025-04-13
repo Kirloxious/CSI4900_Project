@@ -32,7 +32,6 @@ float randomFloat() {
 
 int main() {
 
-
     glfwSetErrorCallback(ErrorCallback);
     
     CameraSettings camSettings{};
@@ -139,6 +138,24 @@ int main() {
     std::cout << "Number of spheres: " << spheres.size() << std::endl;
 
     std::vector<BVHNode> bvhNodes;
+
+
+    // Build Morton-encoded primitives
+    // AABB sceneBounds = computeSceneAABB(spheres); 
+    // std::vector<MortonPrimitive> mortonPrims;
+    // for (size_t i = 0; i < spheresAABBS.size(); ++i) {
+    //     glm::vec3 center = spheresAABBS[i].center();
+    //     glm::vec3 normalized = (center - sceneBounds.min) / (sceneBounds.max - sceneBounds.min);
+    //     mortonPrims.push_back({ morton3D(normalized.x, normalized.y, normalized.z), (int)i });
+    // }
+
+    // std::sort(mortonPrims.begin(), mortonPrims.end(), [](const MortonPrimitive& a, const MortonPrimitive& b) {
+    //     return a.code < b.code;
+    // });
+
+
+    // int root = buildLBVH(bvhNodes, spheresAABBS, mortonPrims, 0, mortonPrims.size());
+
     std::vector<int> sphereIndices(spheres.size());
     std::iota(sphereIndices.begin(), sphereIndices.end(), 0); // [0, 1, 2, ..., N]
     
@@ -147,9 +164,6 @@ int main() {
     std::vector<BVHNodeFlat> bvhFlat;
     bvhFlat.reserve(bvhNodes.size());
     flattenBVH(root, bvhNodes, bvhFlat, -1);
-
-    // std::cout << "Number of BVH nodes: " << bvhNodes.size() << std::endl;
-    // std::cout << "Root index: " << root << std::endl;
 
 
     // Create and bind SSBO for spheres
@@ -209,6 +223,13 @@ int main() {
     double lastTime = glfwGetTime();
     double timer = lastTime;
 
+    const GLuint workGroupSizeX = 16;
+    const GLuint workGroupSizeY = 16;
+    
+    GLuint numGroupsX = (camera.image_width + workGroupSizeX - 1) / workGroupSizeX;
+    GLuint numGroupsY = (camera.image_height + workGroupSizeY - 1) / workGroupSizeY;
+    std::cout << numGroupsX << " " << numGroupsY << std::endl;
+
     while(!window.shouldClose()){
 
         if (camera.moving) {
@@ -233,11 +254,6 @@ int main() {
             glBindImageTexture(0, texture.handle, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
             glBindImageTexture(1, texture.handle, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
             
-            const GLuint workGroupSizeX = 16;
-			const GLuint workGroupSizeY = 16;
-            
-			GLuint numGroupsX = (camera.image_width + workGroupSizeX - 1) / workGroupSizeX;
-			GLuint numGroupsY = (camera.image_height + workGroupSizeY - 1) / workGroupSizeY;
             
             glBeginQuery(GL_TIME_ELAPSED, queryID); // Computer shader timer start
 			glDispatchCompute(numGroupsX, numGroupsY, 1);
