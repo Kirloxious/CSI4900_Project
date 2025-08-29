@@ -1,31 +1,20 @@
 cmake_minimum_required(VERSION 3.21)
 project(main)
 
-# Set C++ standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "-Wall -Wextra")
 
-# Source files
 file(GLOB_RECURSE SRC_FILES src/*.cpp src/*.h)
 
-# Create executable
 add_executable(${PROJECT_NAME} ${SRC_FILES})
 
-# Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
-# FetchContent (for missing dependencies)
 include(FetchContent)
 
-# Find or fetch OpenGL
 find_package(OpenGL REQUIRED)
 target_link_libraries(${PROJECT_NAME} OpenGL::GL)
-
-# macOS-specific OpenGL settings
-if (APPLE)
-    target_link_libraries(${PROJECT_NAME} "-framework OpenGL")
-endif()
 
 # Find or fetch GLFW
 find_package(glfw3 QUIET)
@@ -34,7 +23,7 @@ if (NOT glfw3_FOUND)
     FetchContent_Declare(
         glfw
         GIT_REPOSITORY https://github.com/glfw/glfw.git
-        GIT_TAG 3.4  # Change to latest stable version if needed
+        GIT_TAG 3.4  
     )
     FetchContent_MakeAvailable(glfw)
 endif()
@@ -47,7 +36,7 @@ if (NOT glad_FOUND)
     FetchContent_Declare(
         glad
         GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-        GIT_TAG v2.0.8  # Change to latest stable version if needed
+        GIT_TAG v2.0.8  
     )
     FetchContent_MakeAvailable(glad)
 endif()
@@ -60,7 +49,7 @@ if (NOT glm_FOUND)
     FetchContent_Declare(
         glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
-        GIT_TAG 1.0.1 # Change to latest stable version if needed
+        GIT_TAG 1.0.1 
     )
     FetchContent_MakeAvailable(glm)
 endif()
@@ -71,7 +60,7 @@ if (MINGW)
     target_link_libraries(${PROJECT_NAME} -static-libgcc -static-libstdc++ -lucrt -lmsvcrt)
 endif()
 
-# Ensure required DLLs are copied next to the executable (Windows only)
+# Ensure required DLLs are copied next to the executable 
 if (WIN32)
     add_custom_command(
         TARGET ${PROJECT_NAME} POST_BUILD
@@ -82,7 +71,3 @@ if (WIN32)
     )
 endif()
 
-# macOS Framework dependencies (GLFW requires Cocoa, IOKit, CoreVideo)
-if (APPLE)
-    target_link_libraries(${PROJECT_NAME} "-framework Cocoa" "-framework IOKit" "-framework CoreVideo")
-endif()

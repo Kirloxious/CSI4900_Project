@@ -38,6 +38,13 @@ struct Sphere{
     uint material_index;
 };
 
+struct Quad{
+    vec3 corner_point;
+    vec3 u;
+    vec3 v;
+    vec3 w;
+    uint material_index;
+};
 
 struct Material{
     vec3 color;
@@ -168,6 +175,47 @@ bool hit_sphere(in Ray r, in Sphere s, float ray_tmin, float ray_tmax, inout Hit
     return true;
 }
 
+bool hit_quad(in Ray r, in Quad q, inout HitRecord hit_rec) {
+    // constants of the quad for intersection calculations
+    vec3 u = q.u;
+    vec3 v = q.v;
+    vec3 n = cross(u, v);
+    vec3 normal = normalize(n);
+    float D = dot(normal, q.corner_point);
+    vec3 w = n / dot(n, n);
+
+    float denom = dot(normal, r.direction);
+
+    // Ray is parallel to quad
+    if (denom < 0.00001){
+        return false;
+    }
+
+    float t = (D - dot(normal, r.origin)) / denom;
+    if (t < 0.00001){
+        return false;
+    }
+
+    // determine if hit point lies within planar shape
+    vec3 intersection = r.origin + hit_rec.t * r.direction; 
+    vec3 planar_hitpt_vector = intersection - q.corner_point;
+    float alpha = dot(w, cross(planar_hitpt_vector, v));
+    float beta = dot(w, cross(u, planar_hitpt_vector));
+
+    // check if hit point is outside planar 
+    if ((alpha) < 0.0 || (alpha) > 1.0 || (beta) < 0.0 || (beta) > 1.0){
+        return false;
+    }
+
+    hit_rec.t = t;
+    hit_rec.point = intersection;
+    hit_rec.normal = normal;
+    hit_rec.mat_index = q.material_index;
+    set_face_normal(r, hit_rec.normal, hit_rec);
+
+    return true;
+}
+
 /** End Intersections **/
 
 
@@ -204,49 +252,6 @@ bool intersect_aabb(in Ray r, in vec3 min_b, in vec3 max_b, in vec3 inv_dir) {
     return t_near < t_far && t_far > 0.0f;
 }
 
-// BVH traversal intersection using stack
-bool world_hit_aabb(in Ray r, in float ray_tmin, in float ray_tmax, inout HitRecord hit_rec) {
-    vec3 inv_dir = 1.0f / r.direction; 
-
-    HitRecord temp_rec;
-    bool hit_anything = false;
-    float closest_so_far = ray_tmax;
-
-    // Start with the root node of the BVH
-    int stack[1000]; // Stack for BVH traversal, adjust size if needed
-    int stack_ptr = 0;
-    stack[stack_ptr++] = 0; // Start at the root node
-    
-    while (stack_ptr > 0) {
-        int node_idx = stack[--stack_ptr];  // Pop a node index from the stack
-        BVHNodeFlat node = nodes[node_idx];  // Get the node from the BVH
-        
-        // Check if the ray intersects the AABB of this node
-        if (intersect_aabb(r, node.aabbMin.xyz, node.aabbMax.xyz, inv_dir)) {
-            
-            // If it's a leaf node, check the sphere
-            if (node.meta.z != -1) {  // leaf node condition (sphere index >= 0)
-                Sphere s = spheres[node.meta.z];
-                if (hit_sphere(r, s, ray_tmin, closest_so_far, temp_rec)) {
-                    if (temp_rec.t < closest_so_far) {
-                        hit_anything = true;
-                        closest_so_far = temp_rec.t;
-                        hit_rec = temp_rec;
-                    }
-                }
-            } else { // Internal node, push left and right children to stack
-                if (node.meta.x != -1) {
-                    stack[stack_ptr++] = node.meta.x;
-                }
-                if (node.meta.y != -1) {
-                    stack[stack_ptr++] = node.meta.y;
-                }
-            }
-        }
-    }
-    
-    return hit_anything;
-}
 
 // BVH traversal intersection using pointers
 bool world_hit_aabb_stackless(in Ray r, in float tMin, in float tMax, inout HitRecord hit) {
@@ -346,7 +351,7 @@ bool scatter(uint state, in Ray ray_in, in HitRecord hit_rec, inout vec3 matColo
 }
 
 bool ray_contributes_to_color(vec3 color, float threshold) {
-    return length(color) > threshold;  // Only continue if the color is above the threshold
+    return length(color) > 0.001;  // Only continue if the color is above the threshold
 }
 
 // Original ray color
@@ -369,8 +374,8 @@ vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
                 accumulated_color *= matColor;
                 current_ray = scattered;
 
-                // Early termination if contribution is below a threshold
-                if (!ray_contributes_to_color(accumulated_color, 0.01))
+                // end termination if contribution is below a threshold
+                if (!ray_contributes_to_color(accumulated_color, 0.0001))
                     break;  // Stop further bounces
             } 
             else { // no scatter
@@ -391,10 +396,10 @@ vec3 ray_color(in Ray ray, uint max_bounces, inout uint state) {
 }
 
 
-// early ray termination included
+
 vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
     vec3 accumulated_color = vec3(1.0);
-    vec3 radiance = vec3(0.0);
+    vec3 final_color = vec3(0.0);
     
     Ray current_ray;
     current_ray.origin = ray.origin;
@@ -411,12 +416,12 @@ vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
                 accumulated_color *= matColor;
                 current_ray = scattered;
 
-                // Early termination if contribution is below a threshold
-                if (!ray_contributes_to_color(accumulated_color, 0.01))
-                    break;  // Stop further bounces
+                // end early if contribution is below a threshold
+                if (!(length(accumulated_color) > 0.001))
+                    break;  
             } 
             else { // no scatter
-                radiance += accumulated_color * matColor * emitted;
+                final_color += accumulated_color * matColor * emitted;
                 break;
             }
         } else { // no hit
@@ -425,11 +430,11 @@ vec3 ray_color2(in Ray ray, uint max_bounces, inout uint state) {
             vec3 background_color = mix(vec3(1.0), vec3(0.5, 0.7, 1.0), blend);
             // vec3 background_color = vec3(0.05);
 
-            radiance += accumulated_color * background_color;
+            final_color += accumulated_color * background_color;
             break;
         }
     }
-    return radiance; // max depth reached
+    return final_color; // max depth reached
 }
 
 

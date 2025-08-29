@@ -5,23 +5,45 @@
 #include <iostream>
 #include <algorithm>
 
+
 struct AABB {
     glm::vec3 min;
     glm::vec3 max;
-
+    
     glm::vec3 center() const {
         return (min + max) * 0.5f;
     }
-
-    float surfaceArea() const {
-        glm::vec3 d = max - min;
-        return 2.0f * (d.x * d.y + d.y * d.z + d.z * d.x);
+    
+    AABB expand(float delta) const {
+        float padding = delta/2;
+        return { glm::vec3(min.x - padding, min.y - padding, min.z - padding), 
+            glm::vec3(max.x + padding, max.y + padding, max.z + padding) };
+        }
+        
+        float surfaceArea() const {
+            glm::vec3 d = max - min;
+            return 2.0f * (d.x * d.y + d.y * d.z + d.z * d.x);
+        }
+        
+    };
+    
+void padAABB(AABB& aabb) {
+    float delta = 0.001f;
+    if(aabb.surfaceArea() < delta){
+        aabb = aabb.expand(delta);
     }
-};
+}
 
 AABB computeAABB(const Sphere& s) {
     glm::vec3 rvec(s.radius);
     return { s.position - rvec, s.position + rvec };
+}
+
+AABB computeAABB(const Quad& q) {
+    AABB aabb{};
+    aabb = { q.corner_point, q.corner_point + q.u + q.v};
+    padAABB(aabb); // in case quad is exactly on bouding box, add some padding
+    return aabb;
 }
 
 AABB surroundingBox(const AABB& a, const AABB& b) {
@@ -30,6 +52,7 @@ AABB surroundingBox(const AABB& a, const AABB& b) {
         glm::max(a.max, b.max)
     };
 }
+
 
 struct BVHNode {
     AABB aabb;

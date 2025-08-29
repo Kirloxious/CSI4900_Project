@@ -17,6 +17,24 @@ Sphere createSphere(glm::vec3 position, float radius, uint32_t material_index){
     return sphere;
 }
 
+struct alignas(16) Quad
+{
+    glm::vec3 corner_point;
+    glm::vec3 u;
+    glm::vec3 v;
+    uint32_t material_index;
+
+};
+
+Quad createQuad(glm::vec3 corner_point, glm::vec3 u, glm::vec3 v, uint32_t material_index){
+    Quad quad;
+    quad.corner_point = corner_point;
+    quad.u = u;
+    quad.v = v;
+    quad.material_index = material_index;
+    return quad;
+}
+
 const float MAT_LAMBERTIAN = 0.0;
 const float MAT_METAL = 1.0;
 const float MAT_DIELECTRIC = 2.0;
